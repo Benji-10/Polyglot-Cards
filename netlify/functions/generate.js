@@ -1,4 +1,4 @@
-import { requireUser, json, error } from './_db.js'
+import { requireUser, json, error, handleCors } from './_db.js'
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
 
@@ -42,6 +42,8 @@ Now generate for: ${JSON.stringify(vocabBatch)}`
 }
 
 export const handler = async (event) => {
+  const cors = handleCors(event)
+  if (cors) return cors
   try {
     const userId = requireUser(event)
     if (event.httpMethod !== 'POST') return error('Method not allowed', 405)

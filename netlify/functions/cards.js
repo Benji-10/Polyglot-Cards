@@ -1,6 +1,8 @@
-import { query, requireUser, json, error } from './_db.js'
+import { query, requireUser, json, error, handleCors } from './_db.js'
 
 export const handler = async (event) => {
+  const cors = handleCors(event)
+  if (cors) return cors
   try {
     const userId = requireUser(event)
     const method = event.httpMethod
