@@ -61,6 +61,7 @@ export const handler = async (event) => {
     for (let i = 0; i < vocab.length; i += BATCH_SIZE) {
       const batch = vocab.slice(i, i + BATCH_SIZE)
       const prompt = buildPrompt(vocab.targetLanguage || 'Korean', blueprint, batch)
+      console.log(prompt)
 
       const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
         method: 'POST',
@@ -83,6 +84,7 @@ export const handler = async (event) => {
 
       const geminiData = await geminiRes.json()
       const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text
+      console.log('Gemini raw output:', text)
 
       if (!text) {
         console.error('No text from Gemini:', JSON.stringify(geminiData))
