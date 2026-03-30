@@ -49,7 +49,10 @@ export const handler = async (event) => {
     if (event.httpMethod !== 'POST') return error('Method not allowed', 405)
 
     const { vocab, blueprint } = JSON.parse(event.body)
-    if (!vocab || !blueprint) return error('vocab and blueprint required')
+    if (!vocab?.vocab || !blueprint) return error('vocab and blueprint required')
+
+    const vocabArray = vocab.vocab
+    const targetLanguage = vocab.targetLanguage || 'Korean'
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return error('Gemini API key not configured', 500)
@@ -58,9 +61,9 @@ export const handler = async (event) => {
     const BATCH_SIZE = 10
     const results = []
 
-    for (let i = 0; i < vocab.length; i += BATCH_SIZE) {
-      const batch = vocab.slice(i, i + BATCH_SIZE)
-      const prompt = buildPrompt(vocab.targetLanguage || 'Korean', blueprint, batch)
+    for (let i = 0; i < vocabArray.length; i += BATCH_SIZE) {
+      const batch = vocabArray.slice(i, i + BATCH_SIZE)
+      const prompt = buildPrompt(targetLanguage || 'Korean', blueprint, batch)
       console.log(prompt)
 
       const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
