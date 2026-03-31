@@ -92,11 +92,17 @@ export default function BlueprintPage() {
     })
   }
 
+  const [progressPercent, setProgressPercent] = useState(0)
+  const [batchTimes, setBatchTimes] = useState([]) // store durations in ms
+  const progressRef = useRef(null)
+
   // ── CSV Import ────────────────────────────────────────────
   const handleCSV = useCallback((file) => {
     setImportState('parsing')
     setImportError(null)
     setImportedCards([])
+    setProgressPercent(0)
+    setBatchTimes([])
 
     Papa.parse(file, {
       complete: async (res) => {
@@ -117,17 +123,23 @@ export default function BlueprintPage() {
             batches.push(vocab.slice(i, i + BATCH_SIZE))
           }
 
-          const allCards = []
+          const totalBatches = batches.length
+          let allCards = []
 
-          for (let i = 0; i < batches.length; i++) {
+          for (let i = 0; i < totalBatches; i++) {
             const batch = batches[i]
-            setProgressMsg(`Sending batch ${i + 1}/${batches.length} to Gemini...`)
+            setProgressMsg(`Sending batch ${i + 1}/${totalBatches} to Gemini...`)
 
+            const start = performance.now()
             const genRes = await api.generateCards(
               deckId,
               { vocab: batch, targetLanguage: deck?.target_language || 'Korean' },
               fields || []
             )
+            const end = performance.now()
+            const duration = end - start
+
+            setBatchTimes(prev => [...prev, duration])
 
             if (!genRes?.cards?.length) {
               setImportError(`Gemini returned no cards for batch ${i + 1}. Check your API key.`)
@@ -137,9 +149,13 @@ export default function BlueprintPage() {
 
             allCards.push(...genRes.cards)
             setImportedCards(prev => [...prev, ...genRes.cards])
-            setProgressMsg(`Processed ${allCards.length} of ${vocab.length} words...`)
 
-            // Optional: save each batch immediately
+            // smooth interpolation
+            const targetPercent = Math.round(((i + 1) / totalBatches) * 100)
+            const avgTime = batchTimes.length ? batchTimes.reduce((a, b) => a + b, 0) / batchTimes.length : duration
+            animateProgress(progressPercent, targetPercent, avgTime)
+
+            // optional: save each batch immediately
             const cardsToSave = genRes.cards.map(c => ({
               deck_id: deckId,
               word: c.word,
@@ -148,6 +164,7 @@ export default function BlueprintPage() {
             await batchMutation.mutateAsync(cardsToSave)
           }
 
+          setProgressPercent(100)
           setProgressMsg(`All batches processed. Total ${allCards.length} cards.`)
           setImportState('done')
         } catch (e) {
@@ -157,7 +174,20 @@ export default function BlueprintPage() {
       },
       error: (e) => { setImportError(e.message); setImportState('error') },
     })
-  }, [deckId, deck, fields]) // eslint-disable-line
+  }, [deckId, deck, fields, batchTimes, progressPercent]) // eslint-disable-line
+
+  // ── smooth progress animation ─────────────────────────
+  function animateProgress(fromPercent, toPercent, durationMs) {
+    const start = performance.now()
+    function step(now) {
+      const elapsed = now - start
+      const progress = Math.min(elapsed / durationMs, 1)
+      const current = fromPercent + (toPercent - fromPercent) * progress
+      setProgressPercent(current)
+      if (progress < 1) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }
 
   const handleDrop = useCallback((e) => {
     e.preventDefault()
@@ -320,7 +350,7 @@ export default function BlueprintPage() {
             <div className="text-4xl mb-4" style={{ animation: 'pulse 2s infinite' }}>✨</div>
             <div className="font-medium mb-3" style={{ color: 'var(--text-primary)' }}>{progressMsg}</div>
             <div className="progress-bar w-48 mx-auto">
-              <div className="progress-fill" style={{ width: importState === 'parsing' ? '15%' : '60%', transition: 'width 0.5s' }} />
+              <div className="progress-fill" style={{ width: `${progressPercent}%`, transition: 'width 0.1s linear' }} />
             </div>
             <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>This may take a minute for large lists</div>
           </div>
