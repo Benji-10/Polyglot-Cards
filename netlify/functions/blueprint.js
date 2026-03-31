@@ -24,7 +24,11 @@ export const handler = async (event) => {
         phonetics: Array.isArray(r.phonetics)
           ? r.phonetics
           : typeof r.phonetics === 'string'
-            ? JSON.parse(r.phonetics)
+            ? r.phonetics
+                .replace(/^\{/, '')             // Remove opening brace
+                .replace(/\}$/, '')             // Remove closing brace
+                .split(',')                     // Split by commas
+                .map(item => item.replace(/"/g, '').trim()) // Clean quotes and trim spaces
             : [],
       }))
       return json(parsed)

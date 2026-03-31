@@ -10,6 +10,14 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
       lines.push(`    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. One occurrence only.`)
     }
 
+    phonetics = phonetics
+      .replace(/^{/, '[')    // Replace the starting curly brace with a square bracket
+      .replace(/}$/, ']')    // Replace the ending curly brace with a square bracket
+      .replace(/, /g, ',')   // Ensure there's no space after commas if there's one
+
+    // Now parse it as a JSON array
+    phonetics = JSON.parse(phonetics)
+
     // Add phonetic sub-keys for this field
     const phonetics = f.phonetics || []
     if (phonetics.length > 0) {
