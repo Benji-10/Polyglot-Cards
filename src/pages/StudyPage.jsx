@@ -20,6 +20,14 @@ export default function StudyPage() {
   const { settings } = useAppStore()
   const [sessionConfig, setSessionConfig] = useState(null)
 
+  // When the user switches between learn/freestyle mid-session, reset so the
+  // setup screen is shown for the new mode. Reviews already recorded are persisted.
+  useEffect(() => {
+    setSessionConfig(null)
+  }, [mode])
+  // Track which mode the current session was started in
+  const sessionModeRef = useRef(null)
+
   const { data: deck } = useQuery({
     queryKey: ['decks'],
     queryFn: api.getDecks,
@@ -43,6 +51,21 @@ export default function StudyPage() {
   })
 
   const { stats } = useDeckStats(deckId)
+
+  // When the user navigates to a different mode mid-session, clear the session
+  // so they land on the setup screen for the new mode.
+  // SRS progress was already written server-side card-by-card, so nothing is lost.
+  useEffect(() => {
+    if (sessionConfig && sessionModeRef.current && sessionModeRef.current !== mode) {
+      setSessionConfig(null)
+      sessionModeRef.current = null
+    }
+  }, [mode]) // eslint-disable-line
+
+  const handleStart = (config) => {
+    sessionModeRef.current = mode
+    setSessionConfig(config)
+  }
 
   if (!sessionConfig) {
     return (

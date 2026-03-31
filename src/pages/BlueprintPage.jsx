@@ -6,7 +6,7 @@ import { useToast } from '../components/shared/Toast'
 import Papa from 'papaparse'
 
 const BATCH_SIZE = 25
-const INITIAL_ESTIMATE_MS = 11800 // ~11.8s first-batch estimate
+const INITIAL_ESTIMATE_MS = 11800
 
 const FIELD_TYPE_OPTIONS = [
   { value: 'text',    label: 'Text' },
@@ -40,88 +40,85 @@ const SUGGESTED_FIELDS = [
   { key: 'notes',      label: 'Notes',                 description: 'Grammar notes, register, or usage tips',             field_type: 'text',    show_on_front: false, phonetics: [] },
 ]
 
-// ── Progress hook ──────────────────────────────────────────
-// Predictive progress bar with elastic catch-up / buffer-at-limit behaviour.
-// Returns { percent, startBatch, completeBatch, reset }
-function usePredictiveProgress(totalBatches) {
-  const rafRef = useRef(null)
-  const displayRef = useRef(0)  // current animated display value
+// ── usePredictiveProgress ──────────────────────────────────
+// total is passed into reset() not as a prop, so it's always fresh.
+// Each batch animates toward its own slice of 100% over the estimated duration.
+// The bar NEVER exceeds 100% and NEVER exceeds the current batch's ceiling.
+function usePredictiveProgress() {
+  const rafRef      = useRef(null)
+  const displayRef  = useRef(0)
   const [display, setDisplay] = useState(0)
-  const batchTimesRef = useRef([]) // completed batch durations in ms
-  const batchStartRef = useRef(null)
-  const batchTargetRef = useRef(0)
-  const animatingRef = useRef(false)
 
-  // Smoothly animate displayRef toward `target` over `duration` ms.
-  // If we overshoot the target before duration ends (early finish), snap up.
-  // If target time passes before batch completes (late), hold at target - epsilon.
-  const animateTo = useCallback((target, duration) => {
+  // All mutable state lives in refs — zero re-render side-effects mid-animation
+  const totalRef        = useRef(1)
+  const batchTimesRef   = useRef([])
+  const batchStartRef   = useRef(null)
+  const ceilingRef      = useRef(0) // hard ceiling for current animation
+
+  const animateTo = useCallback((target, durationMs) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    // Hard clamp — never exceed 100, never exceed the caller's target
+    const safeTarget = Math.min(Math.max(target, 0), 100)
     const from = displayRef.current
-    const startTime = performance.now()
-    animatingRef.current = true
+    if (from >= safeTarget) return
 
+    const t0 = performance.now()
     const step = (now) => {
-      const elapsed = now - startTime
-      const t = Math.min(elapsed / duration, 1)
-      const eased = t < 1 ? 1 - Math.pow(1 - t, 3) : 1 // ease-out cubic
-      const value = from + (target - from) * eased
-
+      const elapsed = now - t0
+      const p = Math.min(elapsed / durationMs, 1)
+      const eased = 1 - Math.pow(1 - p, 3) // ease-out cubic
+      // Value is clamped to safeTarget so it can NEVER overshoot
+      const value = Math.min(from + (safeTarget - from) * eased, safeTarget)
       displayRef.current = value
       setDisplay(value)
-
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(step)
-      } else {
-        animatingRef.current = false
-      }
+      if (p < 1) rafRef.current = requestAnimationFrame(step)
     }
     rafRef.current = requestAnimationFrame(step)
   }, [])
 
-  const reset = useCallback(() => {
+  // Call once before the loop starts — pass the real total here
+  const reset = useCallback((totalBatches) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    displayRef.current = 0
+    totalRef.current      = Math.max(totalBatches, 1)
+    displayRef.current    = 0
     batchTimesRef.current = []
     batchStartRef.current = null
-    batchTargetRef.current = 0
+    ceilingRef.current    = 0
     setDisplay(0)
   }, [])
 
-  // Call when a batch request starts
+  // Call immediately BEFORE firing the fetch for batch i
   const startBatch = useCallback((batchIndex) => {
     batchStartRef.current = performance.now()
-    const completedSoFar = batchIndex // batches 0..batchIndex-1 done
-    const targetPct = ((batchIndex + 1) / totalBatches) * 100
+    const total = totalRef.current
+    // This batch occupies the slice from batchIndex/total to (batchIndex+1)/total
+    const ceiling = ((batchIndex + 1) / total) * 100  // e.g. batch 0 of 10 → 10%
+    ceilingRef.current = ceiling
 
-    // Estimate duration: use average of previous batches, or the initial estimate
     const times = batchTimesRef.current
     const estimate = times.length > 0
       ? times.reduce((a, b) => a + b, 0) / times.length
       : INITIAL_ESTIMATE_MS
 
-    batchTargetRef.current = targetPct
-    animateTo(targetPct, estimate)
-  }, [totalBatches, animateTo])
+    // Animate toward this batch's ceiling over estimated duration
+    animateTo(ceiling, estimate)
+  }, [animateTo])
 
-  // Call when a batch request completes
-  const completeBatch = useCallback((batchIndex) => {
-    const elapsed = performance.now() - (batchStartRef.current || performance.now())
+  // Call immediately AFTER the fetch resolves for batch i
+  const completeBatch = useCallback((_batchIndex) => {
+    const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
     batchTimesRef.current = [...batchTimesRef.current, elapsed]
 
-    const donePct = ((batchIndex + 1) / totalBatches) * 100
-
-    // Snap up if we finished early (display is below target)
-    // or just let the animation continue if we're already past (rare)
-    if (displayRef.current < donePct) {
-      animateTo(donePct, 300) // quick snap
+    // Snap to ceiling quickly if animation hasn't reached it yet
+    const ceiling = ceilingRef.current
+    if (displayRef.current < ceiling) {
+      animateTo(ceiling, 250)
     }
-  }, [totalBatches, animateTo])
+  }, [animateTo])
 
-  // Cleanup on unmount
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
 
-  return { percent: display, startBatch, completeBatch, reset }
+  return { percent: display, reset, startBatch, completeBatch }
 }
 
 // ── Main component ─────────────────────────────────────────
@@ -135,9 +132,8 @@ export default function BlueprintPage() {
   const [importError, setImportError] = useState(null)
   const [progressMsg, setProgressMsg] = useState('')
   const [totalImported, setTotalImported] = useState(0)
-  const [totalBatchesState, setTotalBatchesState] = useState(1)
 
-  const progress = usePredictiveProgress(totalBatchesState)
+  const progress = usePredictiveProgress()
 
   const { data: deck } = useQuery({
     queryKey: ['decks'],
@@ -203,7 +199,6 @@ export default function BlueprintPage() {
     setImportState('generating')
     setImportError(null)
     setTotalImported(0)
-    progress.reset()
 
     Papa.parse(file, {
       complete: async res => {
@@ -213,7 +208,8 @@ export default function BlueprintPage() {
 
           const batches = []
           for (let i = 0; i < vocab.length; i += BATCH_SIZE) batches.push(vocab.slice(i, i + BATCH_SIZE))
-          setTotalBatchesState(batches.length)
+          // Reset ONCE with the real total so ceiling-per-batch is correct
+          progress.reset(batches.length)
           setProgressMsg(`0 / ${batches.length} batches`)
 
           let imported = 0
@@ -226,7 +222,6 @@ export default function BlueprintPage() {
               { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
               fieldsRef.current || []
             )
-            console.log(genRes.cards)
             progress.completeBatch(i)
 
             if (!genRes?.cards?.length) { toast.error(`Batch ${i + 1} returned no cards`); continue }
@@ -286,7 +281,7 @@ export default function BlueprintPage() {
         ) : (
           <div className="space-y-2 mb-4">
             {fields.map((field, idx) => (
-              <FieldRow key={`${field.key}-${idx}`} field={field}
+              <FieldRow key={idx} field={field}
                 onUpdate={p => updateField(idx, p)}
                 onRemove={() => removeField(idx)}
                 onMoveUp={() => moveField(idx, -1)}
@@ -349,7 +344,7 @@ export default function BlueprintPage() {
             <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
             <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{totalImported} card{totalImported !== 1 ? 's' : ''} added.</div>
             <button className="btn-secondary mt-4 text-xs"
-              onClick={() => { setImportState('idle'); setTotalImported(0); progress.reset() }}>
+              onClick={() => { setImportState('idle'); setTotalImported(0); progress.reset(1) }}>
               Import more
             </button>
           </div>
