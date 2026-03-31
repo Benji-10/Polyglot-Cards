@@ -9,6 +9,7 @@ import { shuffle, fontForText } from '../lib/utils'
 import { useStudyKeyboard } from '../hooks/useKeyboard'
 import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
+import RubyText from '../components/shared/RubyText'
 
 // ─────────────────────────────────────────────
 // TOP-LEVEL ROUTER
@@ -474,10 +475,15 @@ function FlashCard({ card, blueprint, deck, flipped, clozeMode, clozeData, cloze
                   <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '72px' }}>
                     {field.label}
                   </span>
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
                       ? <ExampleDisplay text={value} />
-                      : <span className="text-sm" style={{ color: 'var(--text-primary)', fontFamily: fontForText(value) }}>{value}</span>
+                      : <RubyText
+                          value={value}
+                          fieldKey={field.key}
+                          cardFields={card.fields}
+                          phonetics={field.phonetics || []}
+                        />
                     }
                   </div>
                 </div>

@@ -3,13 +3,41 @@ import { requireUser, json, error, handleCors } from './_db.js'
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 function buildPrompt(targetLanguage, blueprint, vocabBatch) {
-  const fieldDescriptions = blueprint.map(f => {
-    let desc = `  - "${f.key}": ${f.description || f.label}`
+  const fieldLines = blueprint.map(f => {
+    const lines = [`  - "${f.key}": ${f.description || f.label}`]
+
     if (f.field_type === 'example') {
-      desc += `\n    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. Do NOT wrap anything else. Only the single most relevant occurrence.`
+      lines.push(`    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. One occurrence only.`)
     }
-    return desc
+
+    // Add phonetic sub-keys for this field
+    const phonetics = f.phonetics || []
+    if (phonetics.length > 0) {
+      const PHONETIC_DESCRIPTIONS = {
+        furigana:     `"${f.key}_furigana": hiragana/katakana reading above each kanji character, formatted as space-separated pairs "kanji:reading" e.g. "日本語:にほんご"`,
+        romaji:       `"${f.key}_romaji": Hepburn romanisation of the Japanese`,
+        pinyin:       `"${f.key}_pinyin": Pīnyīn with tone marks for every syllable`,
+        bopomofo:     `"${f.key}_bopomofo": Zhùyīn Fúhào (ㄅㄆㄇ) phonetic symbols`,
+        jyutping:     `"${f.key}_jyutping": Jyutping romanisation for Cantonese`,
+        romanisation: `"${f.key}_romanisation": standard Latin-script transliteration`,
+        diacritics:   `"${f.key}_diacritics": full vowel-marked / tashkeel version of the text`,
+        ipa:          `"${f.key}_ipa": IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/`,
+        english:      `"${f.key}_english": concise English gloss or translation`,
+      }
+      phonetics.forEach(pk => {
+        if (PHONETIC_DESCRIPTIONS[pk]) lines.push(`  - ${PHONETIC_DESCRIPTIONS[pk]}`)
+      })
+    }
+
+    return lines.join('\n')
   }).join('\n')
+
+  // Collect all expected keys for the example output
+  const exampleKeys = ['word']
+  blueprint.forEach(f => {
+    exampleKeys.push(f.key)
+    ;(f.phonetics || []).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
+  })
 
   return `You are a language learning assistant generating flashcard data.
 
@@ -18,22 +46,16 @@ Vocabulary items to process: ${JSON.stringify(vocabBatch)}
 
 For each vocabulary item, generate a JSON object with these fields:
   - "word": the vocabulary item exactly as given
-${fieldDescriptions}
+${fieldLines}
 
 Rules:
 - Return ONLY a valid JSON array, no markdown, no explanation, no code fences.
 - Process every word in the input list.
 - Keep entries concise and accurate.
-- For example sentence fields, {{word}} must wrap ONLY the target vocabulary item itself.
+- For example sentence fields, {{word}} must wrap ONLY the target word itself.
 - If you cannot generate a field, use an empty string "".
 
-Example output format:
-[
-  {
-    "word": "사랑",
-    ${blueprint.map(f => `"${f.key}": "..."`).join(',\n    ')}
-  }
-]
+Expected output keys per item: ${exampleKeys.join(', ')}
 
 Now generate for: ${JSON.stringify(vocabBatch)}`
 }

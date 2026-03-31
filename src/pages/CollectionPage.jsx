@@ -1,17 +1,33 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useToast } from '../components/shared/Toast'
+import Modal from '../components/shared/Modal'
+import RubyText from '../components/shared/RubyText'
+import { formatDueDate } from '../lib/utils'
 
 const PAGE_SIZE = 50
+
+const STATE_STYLE = {
+  new:        { color: 'var(--text-muted)',     label: 'New' },
+  learning:   { color: '#fdcb6e',              label: 'Learning' },
+  review:     { color: 'var(--accent-secondary)', label: 'Review' },
+  relearning: { color: 'var(--accent-danger)', label: 'Relearning' },
+}
 
 export default function CollectionPage() {
   const { deckId } = useParams()
   const qc = useQueryClient()
+  const toast = useToast()
+
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState('all') // all|new|review|due
-  const [editCard, setEditCard] = useState(null)
+  const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
+  const [selected, setSelected] = useState(new Set()) // card ids
+  const [editCard, setEditCard] = useState(null)
+  const [sortBy, setSortBy] = useState('created') // created | word | due | state
+  const [sortDir, setSortDir] = useState('asc')
 
   const { data: cards = [], isLoading } = useQuery({
     queryKey: ['cards', deckId],
@@ -25,147 +41,292 @@ export default function CollectionPage() {
 
   const deleteMutation = useMutation({
     mutationFn: api.deleteCard,
-    onSuccess: (_, id) => {
-      qc.setQueryData(['cards', deckId], old => old?.filter(c => c.id !== id))
-    },
+    onSuccess: (_, id) => qc.setQueryData(['cards', deckId], old => old?.filter(c => c.id !== id)),
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => api.updateCard(id, data),
-    onSuccess: (updated) => {
+    onSuccess: updated => {
       qc.setQueryData(['cards', deckId], old => old?.map(c => c.id === updated.id ? updated : c))
       setEditCard(null)
+      toast.success('Card updated.')
     },
+    onError: e => toast.error(e.message),
   })
 
+  // Bulk delete
+  const bulkDelete = useCallback(async () => {
+    if (!selected.size) return
+    if (!window.confirm(`Delete ${selected.size} card${selected.size !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    let deleted = 0
+    for (const id of selected) {
+      try { await api.deleteCard(id); deleted++ } catch { /* skip */ }
+    }
+    qc.setQueryData(['cards', deckId], old => old?.filter(c => !selected.has(c.id)))
+    setSelected(new Set())
+    toast.success(`${deleted} card${deleted !== 1 ? 's' : ''} deleted.`)
+  }, [selected, deckId, qc, toast])
+
+  // Bulk reset SRS
+  const bulkResetSRS = useCallback(async () => {
+    if (!selected.size) return
+    if (!window.confirm(`Reset SRS progress for ${selected.size} card${selected.size !== 1 ? 's' : ''}?`)) return
+    const resetData = { stability: 0, difficulty: 5, repetitions: 0, interval: 0, srs_state: 'new', seen: false }
+    for (const id of selected) {
+      try { await api.updateCard(id, resetData) } catch { /* skip */ }
+    }
+    qc.invalidateQueries({ queryKey: ['cards', deckId] })
+    setSelected(new Set())
+    toast.success('SRS progress reset.')
+  }, [selected, deckId, qc, toast])
+
   const now = new Date()
+
   const filtered = useMemo(() => {
-    let c = cards
-    if (search) c = c.filter(card => card.word.toLowerCase().includes(search.toLowerCase()) ||
-      Object.values(card.fields || {}).some(v => String(v).toLowerCase().includes(search.toLowerCase())))
-    if (filter === 'new') c = c.filter(x => x.srs_state === 'new' || !x.seen)
-    if (filter === 'review') c = c.filter(x => x.srs_state === 'review')
-    if (filter === 'due') c = c.filter(x => x.due && new Date(x.due) <= now)
+    let c = [...cards]
+    if (search) {
+      const q = search.toLowerCase()
+      c = c.filter(card =>
+        card.word.toLowerCase().includes(q) ||
+        Object.values(card.fields || {}).some(v => String(v).toLowerCase().includes(q))
+      )
+    }
+    if (filter === 'new')       c = c.filter(x => x.srs_state === 'new' || !x.seen)
+    if (filter === 'learning')  c = c.filter(x => x.srs_state === 'learning')
+    if (filter === 'review')    c = c.filter(x => x.srs_state === 'review')
+    if (filter === 'due')       c = c.filter(x => x.due && new Date(x.due) <= now)
+
+    // Sort
+    c.sort((a, b) => {
+      let va, vb
+      if (sortBy === 'word')    { va = a.word; vb = b.word }
+      else if (sortBy === 'due') { va = a.due || '9999'; vb = b.due || '9999' }
+      else if (sortBy === 'state') { va = a.srs_state || ''; vb = b.srs_state || '' }
+      else                       { va = a.created_at || ''; vb = b.created_at || '' }
+      const cmp = va < vb ? -1 : va > vb ? 1 : 0
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+
     return c
-  }, [cards, search, filter])
+  }, [cards, search, filter, sortBy, sortDir])
 
-  const page_cards = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const pageCards = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
-  const stateColor = (state) => {
-    if (state === 'new' || !state) return 'var(--text-muted)'
-    if (state === 'learning') return '#fdcb6e'
-    if (state === 'review') return 'var(--accent-secondary)'
-    if (state === 'relearning') return 'var(--accent-danger)'
-    return 'var(--text-muted)'
+  // Selection helpers
+  const allPageSelected = pageCards.length > 0 && pageCards.every(c => selected.has(c.id))
+  const toggleAll = () => {
+    if (allPageSelected) setSelected(s => { const n = new Set(s); pageCards.forEach(c => n.delete(c.id)); return n })
+    else setSelected(s => { const n = new Set(s); pageCards.forEach(c => n.add(c.id)); return n })
+  }
+  const toggleOne = id => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+
+  const handleSort = col => {
+    if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortBy(col); setSortDir('asc') }
   }
 
+  const goPage = p => { setPage(p); setSelected(new Set()) }
+
+  // Column headers — show first 2 blueprint fields
+  const previewFields = blueprint.slice(0, 2)
+
   return (
-    <div className="max-w-5xl mx-auto px-6 py-10">
-      {/* Header */}
-      <div className="flex items-end justify-between mb-6">
-        <div>
-          <div className="section-title mb-1">Collection</div>
-          <h1 className="font-display text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            Cards <span className="text-lg font-normal" style={{ color: 'var(--text-muted)' }}>({filtered.length})</span>
-          </h1>
+    // Use full viewport height minus the outer main's scroll — achieved by making this
+    // component fill and scroll itself while the parent main is also scrollable.
+    // The sticky header/footer inside handle the layout.
+    <div className="flex flex-col" style={{ minHeight: '100%' }}>
+
+      {/* ── Sticky top bar ──────────────────────────── */}
+      <div className="flex-shrink-0 px-6 pt-8 pb-4" style={{ background: 'var(--bg-primary)' }}>
+        <div className="flex items-end justify-between mb-4">
+          <div>
+            <div className="section-title mb-1">Collection</div>
+            <h1 className="font-display text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
+              Cards
+              <span className="ml-2 text-lg font-normal" style={{ color: 'var(--text-muted)' }}>
+                ({filtered.length}{filtered.length !== cards.length ? ` of ${cards.length}` : ''})
+              </span>
+            </h1>
+          </div>
         </div>
+
+        {/* Search + filters */}
+        <div className="flex gap-2 flex-wrap">
+          <input
+            className="input flex-1 min-w-40"
+            placeholder="Search word, reading, example..."
+            value={search}
+            onChange={e => { setSearch(e.target.value); goPage(0) }}
+          />
+          <div className="flex gap-1 flex-wrap">
+            {[['all','All'],['new','New'],['learning','Learning'],['review','Review'],['due','Due']].map(([v,l]) => (
+              <button key={v}
+                className="text-xs px-3 py-2 rounded-lg border transition-all"
+                style={{ borderColor: filter === v ? 'var(--accent-primary)' : 'var(--border)', color: filter === v ? 'var(--accent-primary)' : 'var(--text-secondary)', background: filter === v ? 'var(--accent-glow)' : 'transparent' }}
+                onClick={() => { setFilter(v); goPage(0) }}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Bulk action bar — only visible when something is selected */}
+        {selected.size > 0 && (
+          <div className="flex items-center gap-3 mt-3 px-4 py-2.5 rounded-xl animate-slide-up"
+            style={{ background: 'var(--accent-glow)', border: '1px solid rgba(124,106,240,.3)' }}>
+            <span className="text-sm font-medium" style={{ color: 'var(--accent-primary)' }}>
+              {selected.size} selected
+            </span>
+            <div className="flex gap-2 ml-auto">
+              <button className="btn-ghost text-xs py-1 px-2.5" onClick={() => setSelected(new Set())}>
+                Clear
+              </button>
+              <button className="btn-secondary text-xs py-1 px-2.5" onClick={bulkResetSRS}>
+                Reset SRS
+              </button>
+              <button className="btn-danger text-xs py-1 px-2.5" onClick={bulkDelete}>
+                Delete {selected.size}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-3 mb-5 flex-wrap">
-        <input
-          className="input flex-1 min-w-48"
-          placeholder="Search cards..."
-          value={search}
-          onChange={e => { setSearch(e.target.value); setPage(0) }}
-        />
-        <div className="flex gap-1">
-          {[['all','All'],['new','New'],['review','Review'],['due','Due']].map(([v,l]) => (
-            <button key={v}
-              className="text-xs px-3 py-2 rounded-lg border transition-all"
-              style={{ borderColor: filter === v ? 'var(--accent-primary)' : 'var(--border)', color: filter === v ? 'var(--accent-primary)' : 'var(--text-secondary)', background: filter === v ? 'var(--accent-glow)' : 'transparent' }}
-              onClick={() => { setFilter(v); setPage(0) }}>
-              {l}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Table */}
-      {isLoading ? (
-        <div className="space-y-2">
-          {[1,2,3,4,5].map(i => <div key={i} className="h-12 rounded-xl shimmer" />)}
-        </div>
-      ) : page_cards.length === 0 ? (
-        <div className="text-center py-16" style={{ color: 'var(--text-muted)' }}>No cards match</div>
-      ) : (
-        <div className="card rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                <th className="px-4 py-3 text-left section-title w-32">Word</th>
-                {blueprint.slice(0, 3).map(f => (
-                  <th key={f.key} className="px-4 py-3 text-left section-title hidden md:table-cell">{f.label}</th>
-                ))}
-                <th className="px-4 py-3 text-left section-title w-20 hidden sm:table-cell">State</th>
-                <th className="px-4 py-3 text-left section-title w-20 hidden lg:table-cell">Due</th>
-                <th className="px-4 py-3 w-20" />
-              </tr>
-            </thead>
-            <tbody>
-              {page_cards.map((card, i) => (
-                <tr key={card.id}
-                  style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : undefined }}
-                  className="hover:bg-white/[0.02] transition-colors group">
-                  <td className="px-4 py-3 font-medium" style={{ color: 'var(--text-primary)' }}>{card.word}</td>
-                  {blueprint.slice(0, 3).map(f => (
-                    <td key={f.key} className="px-4 py-3 hidden md:table-cell max-w-xs truncate" style={{ color: 'var(--text-secondary)' }}>
-                      {card.fields?.[f.key] || '—'}
-                    </td>
+      {/* ── Scrollable table area ────────────────────── */}
+      <div className="flex-1 overflow-auto px-6 min-h-0">
+        {isLoading ? (
+          <div className="space-y-2 pb-6">
+            {[1,2,3,4,5,6,7,8].map(i => <div key={i} className="h-11 rounded-xl shimmer" />)}
+          </div>
+        ) : pageCards.length === 0 ? (
+          <div className="text-center py-16" style={{ color: 'var(--text-muted)' }}>
+            {search || filter !== 'all' ? 'No cards match this filter.' : 'No cards in this deck yet.'}
+          </div>
+        ) : (
+          <div className="card rounded-2xl overflow-hidden mb-4">
+            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: '36px' }} />
+                <col style={{ width: '140px' }} />
+                {previewFields.map(f => <col key={f.key} style={{ width: '160px' }} />)}
+                <col style={{ width: '90px' }} />
+                <col style={{ width: '80px' }} />
+                <col style={{ width: '72px' }} />
+              </colgroup>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', position: 'sticky', top: 0, zIndex: 2 }}>
+                  {/* Select all */}
+                  <th className="px-3 py-3">
+                    <input type="checkbox" checked={allPageSelected} onChange={toggleAll} />
+                  </th>
+                  <SortTh label="Word"  col="word"    sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  {previewFields.map(f => (
+                    <th key={f.key} className="px-3 py-3 text-left section-title truncate">{f.label}</th>
                   ))}
-                  <td className="px-4 py-3 hidden sm:table-cell">
-                    <span className="text-xs font-medium" style={{ color: stateColor(card.srs_state) }}>
-                      {card.srs_state || 'new'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 hidden lg:table-cell text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {card.due ? new Date(card.due).toLocaleDateString() : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button className="btn-ghost p-1.5 text-xs" onClick={() => setEditCard(card)}>✏</button>
-                      <button className="btn-ghost p-1.5 text-xs" style={{ color: 'var(--accent-danger)' }}
-                        onClick={() => confirm('Delete card?') && deleteMutation.mutate(card.id)}>✕</button>
-                    </div>
-                  </td>
+                  <SortTh label="State" col="state"   sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <SortTh label="Due"   col="due"     sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <th className="px-3 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {pageCards.map((card, i) => {
+                  const ss = STATE_STYLE[card.srs_state] || STATE_STYLE.new
+                  const isSelected = selected.has(card.id)
+                  return (
+                    <tr key={card.id}
+                      style={{
+                        borderTop: i > 0 ? '1px solid var(--border-sub)' : undefined,
+                        background: isSelected ? 'rgba(124,106,240,.05)' : undefined,
+                      }}
+                      className="group transition-colors hover:bg-white/[0.02]">
+                      <td className="px-3 py-2.5 text-center">
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleOne(card.id)} />
+                      </td>
+                      <td className="px-3 py-2.5 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                        {card.word}
+                      </td>
+                      {previewFields.map(f => (
+                        <td key={f.key} className="px-3 py-2.5 truncate" style={{ color: 'var(--text-secondary)' }}>
+                          {card.fields?.[f.key]
+                            ? <RubyText value={card.fields[f.key]} fieldKey={f.key} cardFields={card.fields} phonetics={f.phonetics || []} />
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2.5">
+                        <span className="text-xs font-medium" style={{ color: ss.color }}>{ss.label}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {card.due ? formatDueDate(card.due) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex gap-0.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button className="btn-ghost p-1.5 text-xs" title="Edit" onClick={() => setEditCard(card)}>✏</button>
+                          <button className="btn-ghost p-1.5 text-xs" style={{ color: 'var(--accent-danger)' }} title="Delete"
+                            onClick={() => { if (window.confirm('Delete card?')) deleteMutation.mutate(card.id) }}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      {/* Pagination */}
+      {/* ── Sticky pagination footer ─────────────────── */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3 mt-6">
-          <button className="btn-ghost text-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Prev</button>
-          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{page + 1} / {totalPages}</span>
-          <button className="btn-ghost text-sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next →</button>
+        <div className="flex-shrink-0 px-6 py-3 flex items-center justify-between border-t"
+          style={{ background: 'var(--bg-primary)', borderColor: 'var(--border)' }}>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+          </span>
+          <div className="flex items-center gap-1">
+            <button className="btn-ghost text-xs py-1.5 px-3" disabled={page === 0} onClick={() => goPage(0)}>«</button>
+            <button className="btn-ghost text-xs py-1.5 px-3" disabled={page === 0} onClick={() => goPage(page - 1)}>‹ Prev</button>
+            {/* Page number pills — show at most 5 around current */}
+            {Array.from({ length: totalPages }, (_, i) => i)
+              .filter(i => Math.abs(i - page) <= 2)
+              .map(i => (
+                <button key={i}
+                  className="text-xs py-1.5 px-3 rounded-lg transition-all"
+                  style={{ borderColor: i === page ? 'var(--accent-primary)' : 'var(--border)', color: i === page ? 'var(--accent-primary)' : 'var(--text-secondary)', background: i === page ? 'var(--accent-glow)' : 'transparent', border: '1px solid' }}
+                  onClick={() => goPage(i)}>
+                  {i + 1}
+                </button>
+              ))}
+            <button className="btn-ghost text-xs py-1.5 px-3" disabled={page >= totalPages - 1} onClick={() => goPage(page + 1)}>Next ›</button>
+            <button className="btn-ghost text-xs py-1.5 px-3" disabled={page >= totalPages - 1} onClick={() => goPage(totalPages - 1)}>»</button>
+          </div>
         </div>
       )}
 
-      {/* Edit modal */}
+      {/* ── Edit modal ───────────────────────────────── */}
       {editCard && (
         <EditCardModal
           card={editCard}
           blueprint={blueprint}
           onClose={() => setEditCard(null)}
-          onSave={(data) => updateMutation.mutate({ id: editCard.id, data })}
+          onSave={data => updateMutation.mutate({ id: editCard.id, data })}
           saving={updateMutation.isPending}
         />
       )}
     </div>
+  )
+}
+
+function SortTh({ label, col, sortBy, sortDir, onSort }) {
+  const active = sortBy === col
+  return (
+    <th className="px-3 py-3 text-left cursor-pointer select-none" onClick={() => onSort(col)}>
+      <span className="flex items-center gap-1 section-title">
+        {label}
+        <span style={{ color: active ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: '10px' }}>
+          {active ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </span>
+    </th>
   )
 }
 
@@ -174,44 +335,55 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
   const [fields, setFields] = useState({ ...card.fields })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative card-elevated p-6 w-full max-w-lg animate-slide-up max-h-[90vh] overflow-auto">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-display text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Edit Card</h2>
-          <button className="btn-ghost p-1" onClick={onClose}>✕</button>
+    <Modal title="Edit Card" onClose={onClose}>
+      <div className="space-y-4">
+        <div>
+          <label className="section-title block mb-1.5">Word</label>
+          <input className="input" value={word} onChange={e => setWord(e.target.value)} autoFocus />
         </div>
-        <div className="space-y-4">
-          <div>
-            <label className="section-title block mb-1.5">Word</label>
-            <input className="input" value={word} onChange={e => setWord(e.target.value)} />
-          </div>
-          {blueprint.map(f => (
-            <div key={f.key}>
-              <label className="section-title block mb-1.5">{f.label}</label>
-              {f.field_type === 'example' ? (
-                <div>
-                  <textarea className="input text-sm resize-none" rows={3} value={fields[f.key] || ''}
-                    onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                    Use {'{{word}}'} to mark the cloze target
-                  </div>
-                </div>
-              ) : (
+        {blueprint.map(f => (
+          <div key={f.key}>
+            <label className="section-title block mb-1.5">
+              {f.label}
+              {(f.phonetics || []).length > 0 && (
+                <span className="ml-2 normal-case font-normal text-xs" style={{ color: 'var(--text-muted)' }}>
+                  + {f.phonetics.join(', ')}
+                </span>
+              )}
+            </label>
+            {f.field_type === 'example' ? (
+              <>
+                <textarea className="input text-sm resize-none" rows={3} value={fields[f.key] || ''}
+                  onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
+                <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Use {'{{word}}'} to mark cloze</div>
+              </>
+            ) : (
+              <>
                 <input className="input text-sm" value={fields[f.key] || ''}
                   onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-              )}
-            </div>
-          ))}
-          <div className="flex gap-3 pt-2">
-            <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-            <button className="btn-primary flex-1" disabled={saving}
-              onClick={() => onSave({ word, fields })}>
-              {saving ? 'Saving...' : 'Save'}
-            </button>
+                {/* Phonetic sub-fields */}
+                {(f.phonetics || []).map(pk => {
+                  const subKey = `${f.key}_${pk}`
+                  return (
+                    <div key={subKey} className="mt-1.5">
+                      <label className="section-title block mb-1">{pk}</label>
+                      <input className="input text-xs" value={fields[subKey] || ''}
+                        onChange={e => setFields(v => ({ ...v, [subKey]: e.target.value }))} />
+                    </div>
+                  )
+                })}
+              </>
+            )}
           </div>
+        ))}
+        <div className="flex gap-3 pt-2">
+          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn-primary flex-1" disabled={saving}
+            onClick={() => onSave({ word, fields })}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
