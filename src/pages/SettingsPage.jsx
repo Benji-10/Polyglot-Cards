@@ -99,7 +99,7 @@ export default function SettingsPage() {
       {/* Appearance */}
       <Section title="Appearance">
         <SettingRow label="Theme" desc="Colour scheme — applied immediately">
-          <div className="grid [grid-template-columns:repeat(auto-fit,minmax(70px,1fr))] gap-2">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
             {THEMES.map(t => (
               <button
                 key={t.id}
