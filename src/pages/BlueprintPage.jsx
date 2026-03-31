@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { useToast } from '../components/shared/Toast'
 import Papa from 'papaparse'
 
-const BATCH_SIZE = 10
+const BATCH_SIZE = 25
 const INITIAL_ESTIMATE_MS = 11800 // ~11.8s first-batch estimate
 
 const FIELD_TYPE_OPTIONS = [
@@ -226,6 +226,7 @@ export default function BlueprintPage() {
               { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
               fieldsRef.current || []
             )
+            console.log(genRes.cards)
             progress.completeBatch(i)
 
             if (!genRes?.cards?.length) { toast.error(`Batch ${i + 1} returned no cards`); continue }
