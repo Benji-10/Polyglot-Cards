@@ -10,7 +10,7 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
       lines.push(`    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. One occurrence only.`)
     }
 
-    phonetics = phonetics
+    let phonetics = f.phonetics
       .replace(/^{/, '[')    // Replace the starting curly brace with a square bracket
       .replace(/}$/, ']')    // Replace the ending curly brace with a square bracket
       .replace(/, /g, ',')   // Ensure there's no space after commas if there's one
@@ -18,8 +18,6 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
     // Now parse it as a JSON array
     phonetics = JSON.parse(phonetics)
 
-    // Add phonetic sub-keys for this field
-    const phonetics = f.phonetics || []
     if (phonetics.length > 0) {
       const PHONETIC_DESCRIPTIONS = {
         furigana:     `"${f.key}_furigana": hiragana/katakana reading above each kanji character, formatted as space-separated pairs "kanji:reading" e.g. "日本語:にほんご"`,
