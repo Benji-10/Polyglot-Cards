@@ -9,7 +9,7 @@ import { shuffle, fontForText } from '../lib/utils'
 import { useStudyKeyboard } from '../hooks/useKeyboard'
 import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
-//import RubyText from '../components/shared/RubyText'
+import RubyText from '../components/shared/RubyText'
 
 // ─────────────────────────────────────────────
 // TOP-LEVEL ROUTER
