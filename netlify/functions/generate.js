@@ -3,58 +3,47 @@ import { requireUser, json, error, handleCors } from './_db.js'
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
 
 function buildPrompt(targetLanguage, blueprint, vocabBatch) {
+  // Normalise phonetics regardless of shape (old array or new {ruby,extras} object)
+  function getPhoneticKeys(ph) {
+    if (!ph) return []
+    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+    const keys = []
+    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+    return keys
+  }
+
+  const PHONETIC_DESCRIPTIONS = (fieldKey) => ({
+    furigana:              `"${fieldKey}_furigana": hiragana/katakana above each kanji, formatted as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"`,
+    romaji:                `"${fieldKey}_romaji": Hepburn romanisation`,
+    pinyin:                `"${fieldKey}_pinyin": Pīnyīn with tone marks`,
+    bopomofo:              `"${fieldKey}_bopomofo": Zhùyīn Fúhào symbols (ㄅㄆㄇ)`,
+    jyutping:              `"${fieldKey}_jyutping": Jyutping romanisation for Cantonese`,
+    hangulRomanisation:    `"${fieldKey}_hangulRomanisation": Revised Romanisation of Korean`,
+    cantoneseRomanisation: `"${fieldKey}_cantoneseRomanisation": Yale Cantonese romanisation`,
+    romanisation:          `"${fieldKey}_romanisation": standard Latin-script transliteration`,
+    cyrillicTranslit:      `"${fieldKey}_cyrillicTranslit": Latin transliteration of Cyrillic`,
+    tones:                 `"${fieldKey}_tones": tonal representation (numbered or marked)`,
+    diacritics:            `"${fieldKey}_diacritics": full vowel-marked version (tashkeel, nikud, etc.)`,
+    ipa:                   `"${fieldKey}_ipa": IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/`,
+    english:               `"${fieldKey}_english": concise English gloss or translation`,
+  })
+
   const fieldLines = blueprint.map(f => {
     const lines = [`  - "${f.key}": ${f.description || f.label}`]
-
     if (f.field_type === 'example') {
       lines.push(`    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. One occurrence only.`)
     }
-
-    // Add phonetic sub-keys for this field
-    let phonetics = f.phonetics
-
-    phonetics = phonetics
-      .replace(/^{/, '[')    // Replace the starting curly brace with a square bracket
-      .replace(/}$/, ']')    // Replace the ending curly brace with a square bracket
-      .replace(/, /g, ',')   // Ensure there's no space after commas if there's one
-
-    // Now parse it as a JSON array
-    phonetics = JSON.parse(phonetics) || []
-
-    if (phonetics.length > 0) {
-      const PHONETIC_DESCRIPTIONS = {
-        furigana:     `"${f.key}_furigana": hiragana/katakana reading above each kanji character, formatted as space-separated pairs "kanji:reading" e.g. "日本語:にほんご"`,
-        romaji:       `"${f.key}_romaji": Hepburn romanisation of the Japanese`,
-        pinyin:       `"${f.key}_pinyin": Pīnyīn with tone marks for every syllable`,
-        bopomofo:     `"${f.key}_bopomofo": Zhùyīn Fúhào (ㄅㄆㄇ) phonetic symbols`,
-        jyutping:     `"${f.key}_jyutping": Jyutping romanisation for Cantonese`,
-        romanisation: `"${f.key}_romanisation": standard Latin-script transliteration`,
-        diacritics:   `"${f.key}_diacritics": full vowel-marked / tashkeel version of the text`,
-        ipa:          `"${f.key}_ipa": IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/`,
-        english:      `"${f.key}_english": concise English gloss or translation`,
-      }
-      phonetics.forEach(pk => {
-        if (PHONETIC_DESCRIPTIONS[pk]) lines.push(`  - ${PHONETIC_DESCRIPTIONS[pk]}`)
-      })
-    }
-
+    const keys = getPhoneticKeys(f.phonetics)
+    const descs = PHONETIC_DESCRIPTIONS(f.key)
+    keys.forEach(pk => { if (descs[pk]) lines.push(`  - ${descs[pk]}`) })
     return lines.join('\n')
   }).join('\n')
 
-  // Collect all expected keys for the example output
   const exampleKeys = ['word']
   blueprint.forEach(f => {
     exampleKeys.push(f.key)
-    let phonetics = f.phonetics
-
-    phonetics = phonetics
-      .replace(/^{/, '[')    // Replace the starting curly brace with a square bracket
-      .replace(/}$/, ']')    // Replace the ending curly brace with a square bracket
-      .replace(/, /g, ',')   // Ensure there's no space after commas if there's one
-
-    // Now parse it as a JSON array
-    phonetics = JSON.parse(phonetics) || []
-    phonetics.forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
+    getPhoneticKeys(f.phonetics).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
   })
 
   return `You are a language learning assistant generating flashcard data.
@@ -141,4 +130,3 @@ export const handler = async (event) => {
     return error(e.message, 500)
   }
 }
-
