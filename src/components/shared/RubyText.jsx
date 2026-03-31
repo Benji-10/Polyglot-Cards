@@ -1,119 +1,96 @@
 import { fontForText } from '../../lib/utils'
 
 /**
- * Renders a field value with its phonetic annotations.
+ * RubyText renders a field value with phonetic annotations.
  *
- * For ruby annotations (furigana, pinyin, romaji, etc.):
- *   The field value is split character by character and ruby text is shown above.
- *   Furigana uses "kanji:reading kanji2:reading2" format from AI.
- *   All other ruby types show the annotation above the whole word.
+ * phonetics shape (new):  { ruby: 'furigana'|'romaji'|'pinyin'|...|'none', extras: ['ipa','english','diacritics',...] }
+ * phonetics shape (old):  string[] — legacy flat array, handled for backwards compat
  *
- * For non-ruby (IPA, English gloss):
- *   IPA is shown in /brackets/ after the word.
- *   English is shown as a small label below.
+ * Ruby annotation: shown above the word using <ruby>/<rt>
+ * Extras:
+ *   diacritics / tones / vowel marks — shown in (parentheses) after the word
+ *   ipa                              — shown in /slashes/ after the word
+ *   english                          — shown on a new line below in muted text
+ *   transliteration (catch-all)      — shown in (parentheses) after
  */
-export default function RubyText({ value, fieldKey, cardFields, phonetics = [], className = '', style = {} }) {
+export default function RubyText({ value, fieldKey, cardFields, phonetics, className = '', style = {} }) {
   if (!value) return null
 
-  const enabledPhonetics = phonetics || []
-  if (enabledPhonetics.length === 0) {
-    return (
-      <span className={className} style={{ ...style, fontFamily: fontForText(value) }}>
-        {value}
-      </span>
-    )
+  // Normalise phonetics to new shape
+  const ph = normalise(phonetics)
+
+  // No annotations at all
+  if (ph.ruby === 'none' && ph.extras.length === 0) {
+    return <span className={className} style={{ ...style, fontFamily: fontForText(value) }}>{value}</span>
   }
 
-  // Separate ruby (above) from suffix/below annotations
-  const rubyKeys = enabledPhonetics.filter(pk => {
-    const opt = PHONETIC_META[pk]
-    return opt?.ruby
-  })
-  const ipaKey = enabledPhonetics.includes('ipa') ? `${fieldKey}_ipa` : null
-  const englishKey = enabledPhonetics.includes('english') ? `${fieldKey}_english` : null
-
-  const ipaValue = ipaKey ? cardFields?.[ipaKey] : null
-  const englishValue = englishKey ? cardFields?.[englishKey] : null
+  const rubyAnnotation = ph.ruby !== 'none' ? cardFields?.[`${fieldKey}_${ph.ruby}`] : null
+  const extras = ph.extras.map(k => ({ key: k, value: cardFields?.[`${fieldKey}_${k}`] })).filter(e => e.value)
 
   return (
     <span className={className} style={style}>
-      {/* Ruby layer — pick first available ruby annotation */}
-      {rubyKeys.length > 0
-        ? <RubyLayer value={value} fieldKey={fieldKey} cardFields={cardFields} rubyKeys={rubyKeys} />
+      {/* Ruby layer */}
+      {rubyAnnotation
+        ? ph.ruby === 'furigana'
+          ? <FuriganaRuby base={value} furigana={rubyAnnotation} />
+          : <SimpleRuby base={value} annotation={rubyAnnotation} />
         : <span style={{ fontFamily: fontForText(value) }}>{value}</span>
       }
-      {/* IPA in brackets */}
-      {ipaValue && (
-        <span className="ml-1.5 font-mono" style={{ fontSize: '0.85em', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-          /{ipaValue}/
+
+      {/* Inline extras (diacritics, ipa, transliterations) */}
+      {extras.filter(e => e.key !== 'english').map(e => (
+        <span key={e.key} className="ml-1" style={{ fontSize: '0.82em', color: 'var(--text-secondary)', fontFamily: e.key === 'ipa' ? 'monospace' : fontForText(e.value) }}>
+          {e.key === 'ipa' ? `/${e.value}/` : `(${e.value})`}
         </span>
-      )}
+      ))}
+
       {/* English gloss below */}
-      {englishValue && (
-        <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-          {englishValue}
+      {extras.filter(e => e.key === 'english').map(e => (
+        <span key="english" className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          {e.value}
         </span>
-      )}
+      ))}
     </span>
   )
 }
 
-// Which phonetics render as ruby
-const PHONETIC_META = {
-  furigana:     { ruby: true },
-  romaji:       { ruby: true },
-  pinyin:       { ruby: true },
-  bopomofo:     { ruby: true },
-  jyutping:     { ruby: true },
-  romanisation: { ruby: true },
-  diacritics:   { ruby: false },
-  ipa:          { ruby: false },
-  english:      { ruby: false },
-}
-
-function RubyLayer({ value, fieldKey, cardFields, rubyKeys }) {
-  // Try each ruby key in order and use the first that has data
-  for (const pk of rubyKeys) {
-    const annotationKey = `${fieldKey}_${pk}`
-    const annotation = cardFields?.[annotationKey]
-    if (!annotation) continue
-
-    if (pk === 'furigana') {
-      return <FuriganaRuby base={value} furigana={annotation} />
-    }
-
-    // All other ruby types: show annotation above the whole word
-    return (
-      <ruby style={{ fontFamily: fontForText(value), rubyAlign: 'center' }}>
-        {value}
-        <rp>(</rp>
-        <rt style={{ fontSize: '0.6em', color: 'var(--text-secondary)', fontFamily: fontForText(annotation) }}>
-          {annotation}
-        </rt>
-        <rp>)</rp>
-      </ruby>
-    )
+// Normalise legacy flat-array or new object shape
+function normalise(phonetics) {
+  if (!phonetics) return { ruby: 'none', extras: [] }
+  if (Array.isArray(phonetics)) {
+    // Legacy: first ruby-capable item becomes ruby, rest become extras
+    const RUBY_KEYS = ['furigana','romaji','pinyin','bopomofo','jyutping','romanisation','tones','cantoneseRomanisation','hangulRomanisation','cyrillicTranslit']
+    const ruby = phonetics.find(k => RUBY_KEYS.includes(k)) || 'none'
+    const extras = phonetics.filter(k => !RUBY_KEYS.includes(k) || k !== ruby)
+    return { ruby, extras }
   }
-
-  // No annotation found — render plain
-  return <span style={{ fontFamily: fontForText(value) }}>{value}</span>
+  return {
+    ruby: phonetics.ruby || 'none',
+    extras: phonetics.extras || [],
+  }
 }
 
-/**
- * FuriganaRuby — parses "kanji:reading kanji2:reading2" format
- * and renders each pair as an individual <ruby> element.
- * Falls back to whole-word ruby if format doesn't match.
- */
+function SimpleRuby({ base, annotation }) {
+  return (
+    <ruby style={{ fontFamily: fontForText(base), rubyAlign: 'center' }}>
+      {base}
+      <rp>(</rp>
+      <rt style={{ fontSize: '0.6em', color: 'var(--text-secondary)', fontFamily: fontForText(annotation) }}>
+        {annotation}
+      </rt>
+      <rp>)</rp>
+    </ruby>
+  )
+}
+
 function FuriganaRuby({ base, furigana }) {
-  // Try to parse "kanji:reading" pairs
+  // Try "kanji:reading kanji2:reading2" format
   const pairs = furigana.split(' ').map(p => {
-    const colon = p.indexOf(':')
-    if (colon === -1) return null
-    return { kanji: p.slice(0, colon), reading: p.slice(colon + 1) }
+    const c = p.indexOf(':')
+    return c === -1 ? null : { kanji: p.slice(0, c), reading: p.slice(c + 1) }
   }).filter(Boolean)
 
   if (pairs.length > 0) {
-    // Check that the pairs reconstruct the base reasonably
     const reconstructed = pairs.map(p => p.kanji).join('')
     if (reconstructed === base || base.includes(reconstructed)) {
       return (
@@ -131,13 +108,5 @@ function FuriganaRuby({ base, furigana }) {
     }
   }
 
-  // Fallback: whole-word ruby
-  return (
-    <ruby style={{ rubyAlign: 'center' }}>
-      <span style={{ fontFamily: fontForText(base) }}>{base}</span>
-      <rp>(</rp>
-      <rt style={{ fontSize: '0.6em', color: 'var(--text-secondary)' }}>{furigana}</rt>
-      <rp>)</rp>
-    </ruby>
-  )
+  return <SimpleRuby base={base} annotation={furigana} />
 }
