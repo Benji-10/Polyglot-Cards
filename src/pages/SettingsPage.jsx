@@ -7,7 +7,16 @@ const THEMES = [
   { id: 'dark',     label: 'Dark',     swatch: ['#0a0a1a', '#7c6af0', '#00d4a8'] },
   { id: 'midnight', label: 'Midnight', swatch: ['#05050f', '#9d8df5', '#00c49a'] },
   { id: 'slate',    label: 'Slate',    swatch: ['#0f1117', '#6d8df0', '#10b981'] },
-]
+  // Light themes
+  { id: 'light',    label: 'Light',    swatch: ['#ffffff', '#4f46e5', '#10b981'] },
+  { id: 'soft',     label: 'Soft',     swatch: ['#f5f7fb', '#7c6af0', '#34d399'] },
+  { id: 'warm',     label: 'Warm',     swatch: ['#fff7ed', '#f97316', '#fb7185'] },
+  // Cool / stylized themes
+  { id: 'neon',     label: 'Neon',     swatch: ['#050505', '#39ff14', '#ff00ff'] },
+  { id: 'cyber',    label: 'Cyber',    swatch: ['#0a0f1f', '#00e5ff', '#ff3cac'] },
+  { id: 'forest',   label: 'Forest',   swatch: ['#0b1f14', '#22c55e', '#84cc16'] },
+  { id: 'sunset',   label: 'Sunset',   swatch: ['#1a0f0a', '#f97316', '#ec4899'] },
+];
 
 export default function SettingsPage() {
   const { settings, updateSettings } = useAppStore()
