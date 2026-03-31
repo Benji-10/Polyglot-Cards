@@ -9,11 +9,15 @@ CREATE TABLE IF NOT EXISTS decks (
   user_id TEXT NOT NULL,
   name TEXT NOT NULL,
   target_language TEXT NOT NULL,
+  source_language TEXT DEFAULT 'English',
   description TEXT,
   card_front_field TEXT DEFAULT 'auto',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration: add source_language if upgrading an existing database
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS source_language TEXT DEFAULT 'English';
 
 CREATE INDEX IF NOT EXISTS decks_user_id ON decks(user_id);
 
