@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -6,31 +6,37 @@ import { useToast } from '../components/shared/Toast'
 import Papa from 'papaparse'
 
 const FIELD_TYPE_OPTIONS = [
-  { value: 'text', label: 'Text' },
+  { value: 'text',    label: 'Text' },
   { value: 'example', label: 'Example (cloze)' },
 ]
 
 const SUGGESTED_FIELDS = [
-  { key: 'reading', label: 'Reading / Phonetic', description: 'The pronunciation guide (romanisation, furigana, pinyin, etc.)', field_type: 'text', show_on_front: true },
-  { key: 'japanese', label: 'Japanese', description: 'The Japanese equivalent or translation of the target word', field_type: 'text', show_on_front: false },
-  { key: 'chinese', label: 'Chinese (Simplified)', description: 'The Chinese Simplified equivalent or translation', field_type: 'text', show_on_front: false },
-  { key: 'hanja', label: 'Hanja', description: 'The Hanja (Chinese characters used in Korean) form of the word', field_type: 'text', show_on_front: false },
-  { key: 'example', label: 'Example Sentence', description: 'A natural sentence using the target word. Wrap ONLY the target word with {{word}}.', field_type: 'example', show_on_front: false },
-  { key: 'definition', label: 'Definition', description: 'A brief English definition or explanation', field_type: 'text', show_on_front: false },
-  { key: 'notes', label: 'Notes', description: 'Grammar notes, register, or usage tips', field_type: 'text', show_on_front: false },
+  { key: 'reading',    label: 'Reading / Phonetic',   description: 'The pronunciation guide (romanisation, furigana, pinyin, etc.)',            field_type: 'text',    show_on_front: true  },
+  { key: 'japanese',   label: 'Japanese',              description: 'The Japanese equivalent or translation of the target word',                  field_type: 'text',    show_on_front: false },
+  { key: 'chinese',    label: 'Chinese (Simplified)',  description: 'The Chinese Simplified equivalent or translation',                           field_type: 'text',    show_on_front: false },
+  { key: 'hanja',      label: 'Hanja',                 description: 'The Hanja (Chinese characters used in Korean) form of the word',             field_type: 'text',    show_on_front: false },
+  { key: 'example',   label: 'Example Sentence',       description: 'A natural sentence using the target word. Wrap ONLY the target word with {{word}}.', field_type: 'example', show_on_front: false },
+  { key: 'definition', label: 'Definition',            description: 'A brief English definition or explanation',                                  field_type: 'text',    show_on_front: false },
+  { key: 'notes',      label: 'Notes',                 description: 'Grammar notes, register, or usage tips',                                    field_type: 'text',    show_on_front: false },
 ]
+
+const BATCH_SIZE = 10
 
 export default function BlueprintPage() {
   const { deckId } = useParams()
   const qc = useQueryClient()
   const toast = useToast()
 
-  // Local fields state — initialised from query data
   const [fields, setFields] = useState(null)
-  const [importState, setImportState] = useState('idle')
+  const [importState, setImportState] = useState('idle') // idle | generating | done | error
   const [importError, setImportError] = useState(null)
   const [progressMsg, setProgressMsg] = useState('')
-  const [importedCards, setImportedCards] = useState([]) // track batch results
+  const [progressPercent, setProgressPercent] = useState(0)
+  const [totalImported, setTotalImported] = useState(0)
+
+  // Refs for animation — avoids stale closures entirely
+  const rafRef = useRef(null)
+  const progressRef = useRef(0) // actual current display value
 
   const { data: deck } = useQuery({
     queryKey: ['decks'],
@@ -44,6 +50,7 @@ export default function BlueprintPage() {
     enabled: !!deckId,
   })
 
+  // Initialise local fields from server data — only once
   useEffect(() => {
     if (blueprintData !== undefined && fields === null) {
       setFields(blueprintData ?? [])
@@ -60,15 +67,13 @@ export default function BlueprintPage() {
     onError: (e) => toast.error(`Save failed: ${e.message}`),
   })
 
-  const batchMutation = useMutation({
+  const batchSaveMutation = useMutation({
     mutationFn: (cards) => api.batchCreateCards(cards),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cards', deckId] })
-    },
-    onError: (e) => { setImportError(e.message); setImportState('error') },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['cards', deckId] }),
+    onError: (e) => toast.error(`Save error: ${e.message}`),
   })
 
-  // ── Field management ──────────────────────────────────────
+  // ── Field management ────────────────────────────────────
   const addField = (suggested) => {
     const base = suggested
       ? { ...suggested }
@@ -87,22 +92,45 @@ export default function BlueprintPage() {
       const next = [...prev]
       const swap = idx + dir
       if (swap < 0 || swap >= next.length) return prev
-        ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
       return next
     })
   }
 
-  const [progressPercent, setProgressPercent] = useState(0)
-  const [batchTimes, setBatchTimes] = useState([]) // store durations in ms
-  // const progressRef = useRef(null)
+  // ── Progress animation ──────────────────────────────────
+  // Smoothly animate from current value to target over `duration` ms.
+  // Uses a ref for current value so it's never stale across batches.
+  const animateTo = (target, duration = 800) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const from = progressRef.current
+    const start = performance.now()
 
-  // ── CSV Import ────────────────────────────────────────────
+    const step = (now) => {
+      const t = Math.min((now - start) / duration, 1)
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - t, 3)
+      const value = from + (target - from) * eased
+      progressRef.current = value
+      setProgressPercent(value)
+      if (t < 1) rafRef.current = requestAnimationFrame(step)
+    }
+
+    rafRef.current = requestAnimationFrame(step)
+  }
+
+  // ── CSV Import ──────────────────────────────────────────
+  // handleCSV uses a ref for fields so it never becomes stale in the closure
+  const fieldsRef = useRef(fields)
+  useEffect(() => { fieldsRef.current = fields }, [fields])
+  const deckRef = useRef(deck)
+  useEffect(() => { deckRef.current = deck }, [deck])
+
   const handleCSV = useCallback((file) => {
-    setImportState('parsing')
+    setImportState('generating')
     setImportError(null)
-    setImportedCards([])
+    setTotalImported(0)
+    progressRef.current = 0
     setProgressPercent(0)
-    setBatchTimes([])
 
     Papa.parse(file, {
       complete: async (res) => {
@@ -114,80 +142,61 @@ export default function BlueprintPage() {
             return
           }
 
-          setImportState('generating')
-          setProgressMsg(`Preparing ${vocab.length} words...`)
-
-          const BATCH_SIZE = 10
+          // Split into batches
           const batches = []
           for (let i = 0; i < vocab.length; i += BATCH_SIZE) {
             batches.push(vocab.slice(i, i + BATCH_SIZE))
           }
 
-          const totalBatches = batches.length
-          let allCards = []
+          setProgressMsg(`0 / ${batches.length} batches`)
+          let imported = 0
 
-          for (let i = 0; i < totalBatches; i++) {
+          for (let i = 0; i < batches.length; i++) {
             const batch = batches[i]
-            setProgressMsg(`Sending batch ${i + 1}/${totalBatches} to Gemini...`)
+            setProgressMsg(`Batch ${i + 1} / ${batches.length} — asking Gemini...`)
 
-            const start = performance.now()
             const genRes = await api.generateCards(
               deckId,
-              { vocab: batch, targetLanguage: deck?.target_language || 'Korean' },
-              fields || []
+              { vocab: batch, targetLanguage: deckRef.current?.target_language || 'Korean' },
+              fieldsRef.current || []
             )
-            const end = performance.now()
-            const duration = end - start
-
-            setBatchTimes(prev => [...prev, duration])
 
             if (!genRes?.cards?.length) {
-              setImportError(`Gemini returned no cards for batch ${i + 1}. Check your API key.`)
-              setImportState('error')
-              return
+              toast.error(`Batch ${i + 1} returned no cards — check your Gemini API key`)
+              continue
             }
 
-            allCards.push(...genRes.cards)
-            setImportedCards(prev => [...prev, ...genRes.cards])
+            // Save this batch immediately
+            const toSave = genRes.cards
+              .filter(c => !c._error)
+              .map(c => ({ deck_id: deckId, word: c.word, fields: c }))
 
-            // smooth interpolation
-            const targetPercent = Math.round(((i + 1) / totalBatches) * 100)
-            const avgTime = batchTimes.length ? batchTimes.reduce((a, b) => a + b, 0) / batchTimes.length : duration
-            animateProgress(progressPercent, targetPercent, avgTime)
+            if (toSave.length) {
+              await batchSaveMutation.mutateAsync(toSave)
+              imported += toSave.length
+              setTotalImported(imported)
+            }
 
-            // optional: save each batch immediately
-            const cardsToSave = genRes.cards.map(c => ({
-              deck_id: deckId,
-              word: c.word,
-              fields: c,
-            }))
-            await batchMutation.mutateAsync(cardsToSave)
+            // Animate progress to proportion of batches done
+            const targetPct = ((i + 1) / batches.length) * 100
+            animateTo(targetPct, 600)
+            setProgressMsg(`Batch ${i + 1} / ${batches.length} done — ${imported} cards saved`)
           }
 
-          setProgressPercent(100)
-          setProgressMsg(`All batches processed. Total ${allCards.length} cards.`)
+          // Snap to 100 at the end
+          animateTo(100, 300)
           setImportState('done')
         } catch (e) {
           setImportError(e.message)
           setImportState('error')
         }
       },
-      error: (e) => { setImportError(e.message); setImportState('error') },
+      error: (e) => {
+        setImportError(e.message)
+        setImportState('error')
+      },
     })
-  }, [deckId, deck, fields, batchTimes, progressPercent]) // eslint-disable-line
-
-  // ── smooth progress animation ─────────────────────────
-  function animateProgress(fromPercent, toPercent, durationMs) {
-    const start = performance.now()
-    function step(now) {
-      const elapsed = now - start
-      const progress = Math.min(elapsed / durationMs, 1)
-      const current = fromPercent + (toPercent - fromPercent) * progress
-      setProgressPercent(current)
-      if (progress < 1) requestAnimationFrame(step)
-    }
-    requestAnimationFrame(step)
-  }
+  }, [deckId]) // eslint-disable-line — uses refs for fields/deck to avoid stale closures
 
   const handleDrop = useCallback((e) => {
     e.preventDefault()
@@ -195,7 +204,7 @@ export default function BlueprintPage() {
     if (file) handleCSV(file)
   }, [handleCSV])
 
-  // ── Render ────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────
   if (blueprintLoading || fields === null) {
     return (
       <div className="max-w-3xl mx-auto px-6 py-10">
@@ -225,7 +234,7 @@ export default function BlueprintPage() {
         </p>
       </div>
 
-      {/* ── Blueprint fields ─────────────────────────────── */}
+      {/* ── Blueprint fields ───────────────────────────── */}
       <section className="mb-10">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-display font-semibold text-lg" style={{ color: 'var(--text-primary)' }}>
@@ -261,7 +270,6 @@ export default function BlueprintPage() {
           </div>
         )}
 
-        {/* Suggestions */}
         {unusedSuggestions.length > 0 && (
           <div className="mb-5">
             <div className="section-title mb-2">Quick add</div>
@@ -269,8 +277,7 @@ export default function BlueprintPage() {
               {unusedSuggestions.map(s => (
                 <button
                   key={s.key}
-                  className="tag cursor-pointer transition-colors"
-                  style={{ ':hover': { borderColor: 'var(--accent-primary)' } }}
+                  className="tag cursor-pointer transition-all hover:border-purple-500"
                   onClick={() => addField(s)}
                 >
                   + {s.label}
@@ -294,21 +301,21 @@ export default function BlueprintPage() {
         </div>
       </section>
 
-      {/* ── CSV Import ───────────────────────────────────── */}
+      {/* ── CSV Import ─────────────────────────────────── */}
       <section className="mb-10">
         <h2 className="font-display font-semibold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>
           Import Vocabulary
         </h2>
         <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
-          CSV with one word per cell. Gemini will fill in all blueprint fields in batches of 10.
-          Make sure you have saved your blueprint first.
+          CSV with one word per cell. The frontend calls Gemini once per batch of {BATCH_SIZE} so no request times out.
+          Save your blueprint first.
         </p>
 
         {importState === 'idle' || importState === 'error' ? (
           <label
             onDrop={handleDrop}
             onDragOver={e => e.preventDefault()}
-            className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors"
+            className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
             style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}
           >
             <span className="text-4xl">📄</span>
@@ -331,33 +338,53 @@ export default function BlueprintPage() {
               onChange={e => e.target.files[0] && handleCSV(e.target.files[0])}
             />
           </label>
+
         ) : importState === 'done' ? (
           <div className="card p-6 text-center">
             <div className="text-4xl mb-3">✅</div>
             <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
             <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {importedCards.length} card{importedCards.length !== 1 ? 's' : ''} added to your deck.
+              {totalImported} card{totalImported !== 1 ? 's' : ''} added to your deck.
             </div>
             <button
               className="btn-secondary mt-4 text-xs"
-              onClick={() => { setImportState('idle'); setImportedCards([]) }}
+              onClick={() => { setImportState('idle'); setTotalImported(0); progressRef.current = 0; setProgressPercent(0) }}
             >
               Import more
             </button>
           </div>
+
         ) : (
-          <div className="card p-8 text-center">
-            <div className="text-4xl mb-4" style={{ animation: 'pulse 2s infinite' }}>✨</div>
-            <div className="font-medium mb-3" style={{ color: 'var(--text-primary)' }}>{progressMsg}</div>
-            <div className="progress-bar w-48 mx-auto">
-              <div className="progress-fill" style={{ width: `${progressPercent}%`, transition: 'width 0.1s linear' }} />
+          /* generating state */
+          <div className="card p-8">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-2xl" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>✨</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
+                  {progressMsg || 'Generating...'}
+                </div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {totalImported > 0 ? `${totalImported} cards saved so far` : 'Starting...'}
+                </div>
+              </div>
+              <div className="text-sm font-mono tabular-nums" style={{ color: 'var(--accent-primary)' }}>
+                {Math.round(progressPercent)}%
+              </div>
             </div>
-            <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>This may take a minute for large lists</div>
+            <div className="progress-bar">
+              <div
+                className="progress-fill"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
+              Each batch is a separate request — large lists will take a few minutes
+            </div>
           </div>
         )}
       </section>
 
-      {/* ── Manual add ──────────────────────────────────── */}
+      {/* ── Manual add ────────────────────────────────── */}
       <section>
         <h2 className="font-display font-semibold text-lg mb-4" style={{ color: 'var(--text-primary)' }}>
           Add Card Manually
@@ -375,28 +402,18 @@ export default function BlueprintPage() {
   )
 }
 
-// ── FieldRow ──────────────────────────────────────────────
+// ── FieldRow ────────────────────────────────────────────
 function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, isLast }) {
-  const [expanded, setExpanded] = useState(false)
-
   return (
     <div className="card p-4 rounded-xl">
-      <div className="flex items-center gap-3">
-        {/* Reorder buttons */}
-        <div className="flex flex-col gap-0.5 flex-shrink-0">
-          <button
-            disabled={isFirst}
-            className="btn-ghost p-0.5 text-xs disabled:opacity-20"
-            onClick={onMoveUp}
-          >▲</button>
-          <button
-            disabled={isLast}
-            className="btn-ghost p-0.5 text-xs disabled:opacity-20"
-            onClick={onMoveDown}
-          >▼</button>
+      <div className="flex items-start gap-3">
+        {/* Reorder */}
+        <div className="flex flex-col gap-0.5 flex-shrink-0 mt-1">
+          <button disabled={isFirst}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+          <button disabled={isLast}   className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
         </div>
 
-        {/* Field config */}
+        {/* Config */}
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <input
@@ -435,13 +452,13 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
             className="input text-xs py-1.5 w-full"
             value={field.description || ''}
             onChange={e => onUpdate({ description: e.target.value })}
-            placeholder={`Describe this field for the AI — e.g. "The Japanese translation of the ${field.label || 'target'} word"`}
+            placeholder={`AI hint — e.g. "The Japanese reading of the ${field.label || 'target'} word"`}
           />
 
           {field.field_type === 'example' && (
             <div className="text-xs px-2 py-1.5 rounded-lg"
               style={{ background: 'rgba(0,212,168,.08)', color: 'var(--accent-secondary)', border: '1px solid rgba(0,212,168,.2)' }}>
-              ✦ Cloze: Gemini will wrap the target word with {'{{word}}'} — enabling fill-in-the-blank study
+              ✦ Cloze enabled — Gemini will wrap the target word with {'{{word}}'}
             </div>
           )}
         </div>
@@ -450,14 +467,13 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           className="btn-ghost p-1.5 text-xs flex-shrink-0"
           style={{ color: 'var(--accent-danger)' }}
           onClick={onRemove}
-          title="Remove field"
         >✕</button>
       </div>
     </div>
   )
 }
 
-// ── ManualCardForm ────────────────────────────────────────
+// ── ManualCardForm ──────────────────────────────────────
 function ManualCardForm({ deckId, fields, onSaved }) {
   const [word, setWord] = useState('')
   const [fieldValues, setFieldValues] = useState({})
@@ -511,7 +527,7 @@ function ManualCardForm({ deckId, fields, onSaved }) {
               rows={2}
               value={fieldValues[f.key] || ''}
               onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
-              placeholder={`e.g. 나는 {{사랑}}해. (wrap the target word with {{word}})`}
+              placeholder="e.g. 나는 {{사랑}}해."
             />
           ) : (
             <input
