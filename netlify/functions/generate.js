@@ -1,6 +1,6 @@
 import { requireUser, json, error, handleCors } from './_db.js'
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 function buildPrompt(targetLanguage, blueprint, vocabBatch) {
   // Identify example field (for cloze)
@@ -64,7 +64,6 @@ export const handler = async (event) => {
     for (let i = 0; i < vocabArray.length; i += BATCH_SIZE) {
       const batch = vocabArray.slice(i, i + BATCH_SIZE)
       const prompt = buildPrompt(targetLanguage || 'Korean', blueprint, batch)
-      console.log(prompt)
 
       const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
         method: 'POST',
