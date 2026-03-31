@@ -6,18 +6,18 @@ import { useToast } from '../components/shared/Toast'
 import Papa from 'papaparse'
 
 const FIELD_TYPE_OPTIONS = [
-  { value: 'text',    label: 'Text' },
+  { value: 'text', label: 'Text' },
   { value: 'example', label: 'Example (cloze)' },
 ]
 
 const SUGGESTED_FIELDS = [
-  { key: 'reading',   label: 'Reading / Phonetic',    description: 'The pronunciation guide (romanisation, furigana, pinyin, etc.)', field_type: 'text',    show_on_front: true  },
-  { key: 'japanese',  label: 'Japanese',               description: 'The Japanese equivalent or translation of the target word',        field_type: 'text',    show_on_front: false },
-  { key: 'chinese',   label: 'Chinese (Simplified)',   description: 'The Chinese Simplified equivalent or translation',                  field_type: 'text',    show_on_front: false },
-  { key: 'hanja',     label: 'Hanja',                  description: 'The Hanja (Chinese characters used in Korean) form of the word',   field_type: 'text',    show_on_front: false },
-  { key: 'example',  label: 'Example Sentence',        description: 'A natural sentence using the target word. Wrap ONLY the target word with {{word}}.',  field_type: 'example', show_on_front: false },
-  { key: 'definition',label: 'Definition',             description: 'A brief English definition or explanation',                        field_type: 'text',    show_on_front: false },
-  { key: 'notes',     label: 'Notes',                  description: 'Grammar notes, register, or usage tips',                          field_type: 'text',    show_on_front: false },
+  { key: 'reading', label: 'Reading / Phonetic', description: 'The pronunciation guide (romanisation, furigana, pinyin, etc.)', field_type: 'text', show_on_front: true },
+  { key: 'japanese', label: 'Japanese', description: 'The Japanese equivalent or translation of the target word', field_type: 'text', show_on_front: false },
+  { key: 'chinese', label: 'Chinese (Simplified)', description: 'The Chinese Simplified equivalent or translation', field_type: 'text', show_on_front: false },
+  { key: 'hanja', label: 'Hanja', description: 'The Hanja (Chinese characters used in Korean) form of the word', field_type: 'text', show_on_front: false },
+  { key: 'example', label: 'Example Sentence', description: 'A natural sentence using the target word. Wrap ONLY the target word with {{word}}.', field_type: 'example', show_on_front: false },
+  { key: 'definition', label: 'Definition', description: 'A brief English definition or explanation', field_type: 'text', show_on_front: false },
+  { key: 'notes', label: 'Notes', description: 'Grammar notes, register, or usage tips', field_type: 'text', show_on_front: false },
 ]
 
 export default function BlueprintPage() {
@@ -28,9 +28,9 @@ export default function BlueprintPage() {
   // Local fields state — initialised from query data
   const [fields, setFields] = useState(null)
   const [importState, setImportState] = useState('idle')
-  const [importResults, setImportResults] = useState(null)
   const [importError, setImportError] = useState(null)
   const [progressMsg, setProgressMsg] = useState('')
+  const [importedCards, setImportedCards] = useState([]) // track batch results
 
   const { data: deck } = useQuery({
     queryKey: ['decks'],
@@ -38,14 +38,12 @@ export default function BlueprintPage() {
     select: (decks) => decks.find(d => d.id === deckId),
   })
 
-  // TanStack Query v5: no onSuccess — use the data directly
   const { data: blueprintData, isLoading: blueprintLoading } = useQuery({
     queryKey: ['blueprint', deckId],
     queryFn: () => api.getBlueprintFields(deckId),
     enabled: !!deckId,
   })
 
-  // Sync server data into local state once, without overwriting user edits
   useEffect(() => {
     if (blueprintData !== undefined && fields === null) {
       setFields(blueprintData ?? [])
@@ -64,9 +62,7 @@ export default function BlueprintPage() {
 
   const batchMutation = useMutation({
     mutationFn: (cards) => api.batchCreateCards(cards),
-    onSuccess: (res) => {
-      setImportResults(res)
-      setImportState('done')
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['cards', deckId] })
     },
     onError: (e) => { setImportError(e.message); setImportState('error') },
@@ -91,7 +87,7 @@ export default function BlueprintPage() {
       const next = [...prev]
       const swap = idx + dir
       if (swap < 0 || swap >= next.length) return prev
-      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+        ;[next[idx], next[swap]] = [next[swap], next[idx]]
       return next
     })
   }
@@ -100,6 +96,8 @@ export default function BlueprintPage() {
   const handleCSV = useCallback((file) => {
     setImportState('parsing')
     setImportError(null)
+    setImportedCards([])
+
     Papa.parse(file, {
       complete: async (res) => {
         try {
@@ -111,27 +109,47 @@ export default function BlueprintPage() {
           }
 
           setImportState('generating')
-          setProgressMsg(`Sending ${vocab.length} words to Gemini...`)
+          setProgressMsg(`Preparing ${vocab.length} words...`)
 
-          const genRes = await api.generateCards(
-            deckId,
-            { vocab, targetLanguage: deck?.target_language || 'Korean' },
-            fields || []
-          )
-
-          if (!genRes?.cards?.length) {
-            setImportError('Gemini returned no cards. Check your API key.')
-            setImportState('error')
-            return
+          const BATCH_SIZE = 10
+          const batches = []
+          for (let i = 0; i < vocab.length; i += BATCH_SIZE) {
+            batches.push(vocab.slice(i, i + BATCH_SIZE))
           }
 
-          setProgressMsg(`Saving ${genRes.cards.length} cards...`)
-          const cards = genRes.cards.map(c => ({
-            deck_id: deckId,
-            word: c.word,
-            fields: c,
-          }))
-          await batchMutation.mutateAsync(cards)
+          const allCards = []
+
+          for (let i = 0; i < batches.length; i++) {
+            const batch = batches[i]
+            setProgressMsg(`Sending batch ${i + 1}/${batches.length} to Gemini...`)
+
+            const genRes = await api.generateCards(
+              deckId,
+              { vocab: batch, targetLanguage: deck?.target_language || 'Korean' },
+              fields || []
+            )
+
+            if (!genRes?.cards?.length) {
+              setImportError(`Gemini returned no cards for batch ${i + 1}. Check your API key.`)
+              setImportState('error')
+              return
+            }
+
+            allCards.push(...genRes.cards)
+            setImportedCards(prev => [...prev, ...genRes.cards])
+            setProgressMsg(`Processed ${allCards.length} of ${vocab.length} words...`)
+
+            // Optional: save each batch immediately
+            const cardsToSave = genRes.cards.map(c => ({
+              deck_id: deckId,
+              word: c.word,
+              fields: c,
+            }))
+            await batchMutation.mutateAsync(cardsToSave)
+          }
+
+          setProgressMsg(`All batches processed. Total ${allCards.length} cards.`)
+          setImportState('done')
         } catch (e) {
           setImportError(e.message)
           setImportState('error')
@@ -288,11 +306,11 @@ export default function BlueprintPage() {
             <div className="text-4xl mb-3">✅</div>
             <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
             <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {importResults?.inserted} card{importResults?.inserted !== 1 ? 's' : ''} added to your deck.
+              {importedCards.length} card{importedCards.length !== 1 ? 's' : ''} added to your deck.
             </div>
             <button
               className="btn-secondary mt-4 text-xs"
-              onClick={() => { setImportState('idle'); setImportResults(null) }}
+              onClick={() => { setImportState('idle'); setImportedCards([]) }}
             >
               Import more
             </button>
@@ -383,7 +401,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
             </label>
           </div>
 
-          {/* AI description — always visible so users fill it in */}
           <input
             className="input text-xs py-1.5 w-full"
             value={field.description || ''}
@@ -399,7 +416,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           )}
         </div>
 
-        {/* Remove */}
         <button
           className="btn-ghost p-1.5 text-xs flex-shrink-0"
           style={{ color: 'var(--accent-danger)' }}
