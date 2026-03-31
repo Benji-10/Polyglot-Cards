@@ -94,7 +94,7 @@ export default function BlueprintPage() {
 
   const [progressPercent, setProgressPercent] = useState(0)
   const [batchTimes, setBatchTimes] = useState([]) // store durations in ms
-  const progressRef = useRef(null)
+  // const progressRef = useRef(null)
 
   // ── CSV Import ────────────────────────────────────────────
   const handleCSV = useCallback((file) => {
