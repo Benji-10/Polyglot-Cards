@@ -128,18 +128,77 @@ export default function SettingsPage() {
             onChange={e => updateSettings({ defaultBatchSize: Number(e.target.value) })}
           />
         </SettingRow>
+      
         <SettingRow label="SRS algorithm" desc="Powers Learn mode scheduling">
           <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--accent-secondary)' }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--accent-secondary)', display: 'inline-block' }} />
             FSRS-5 active
           </span>
         </SettingRow>
+      
         <SettingRow label="Animations" desc="Card flip and page transitions">
           <Toggle
             value={settings.animationsEnabled}
             onChange={v => updateSettings({ animationsEnabled: v })}
           />
         </SettingRow>
+
+        <SettingRow label="Source language" desc="Base language for translations and AI generation">
+          <input
+            type="text"
+            className="input w-32 text-sm text-center"
+            value={settings.sourceLanguage ?? 'English'}
+            onChange={(e) => updateSettings({ sourceLanguage: e.target.value })}
+          />
+        </SettingRow>
+      
+        {/* Quick Add Fields */}
+        <div>
+          <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+            Quick Add Fields
+          </div>
+          <div className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+            Control which fields appear when quickly adding new cards
+          </div>
+      
+          <div className="space-y-2">
+            {(settings.quickAddFields ?? []).map((field) => (
+              <div
+                key={field.key}
+                className="flex items-center justify-between p-3 rounded-xl"
+                style={{
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <div className="min-w-0">
+                  <div
+                    className="text-sm font-medium"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    {field.label}
+                  </div>
+                  <div
+                    className="text-xs mt-0.5"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    {field.description}
+                  </div>
+                </div>
+      
+                <Toggle
+                  value={field.show_on_front}
+                  onChange={(v) => {
+                    const next = (settings.quickAddFields ?? []).map(f =>
+                      f.key === field.key ? { ...f, show_on_front: v } : f
+                    )
+                    updateSettings({ quickAddFields: next })
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       </Section>
 
       {/* Connections */}
