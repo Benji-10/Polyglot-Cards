@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-// CSS variable sets for each theme
 const THEMES = {
   dark: {
     '--bg-primary':    '#0a0a1a',
@@ -56,6 +55,17 @@ export function applyTheme(name) {
   Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
 }
 
+// Default quick-add field suggestions shown in Blueprint page
+export const DEFAULT_QUICK_ADD = [
+  { key: 'reading',    label: 'Reading / Phonetic',   description: 'The pronunciation guide for the word',                                                   field_type: 'text',    show_on_front: true,  phonetics: { ruby: 'none', extras: [] } },
+  { key: 'japanese',   label: 'Japanese',              description: 'The Japanese equivalent or translation',                                                 field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'chinese',    label: 'Chinese (Simplified)',  description: 'The Chinese Simplified equivalent or translation',                                       field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'hanja',      label: 'Hanja',                 description: 'The Hanja (Chinese characters) form',                                                    field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'example',   label: 'Example Sentence',       description: 'A natural sentence using the word. Wrap ONLY the target word with {{word}}.',            field_type: 'example', show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'definition', label: 'Definition',            description: 'A brief English definition',                                                             field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'notes',      label: 'Notes',                 description: 'Grammar notes, register, or usage tips',                                                 field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+]
+
 export const useAppStore = create(
   persist(
     (set) => ({
@@ -66,21 +76,17 @@ export const useAppStore = create(
         theme: 'dark',
         defaultBatchSize: 20,
         animationsEnabled: true,
+        quickAddFields: DEFAULT_QUICK_ADD,
       },
       updateSettings: (patch) => set((s) => {
         const next = { ...s.settings, ...patch }
-        // Apply theme immediately when it changes
         if (patch.theme) applyTheme(patch.theme)
         return { settings: next }
       }),
     }),
     {
       name: 'polyglot-store',
-      partialize: (s) => ({
-        activeDeckId: s.activeDeckId,
-        settings: s.settings,
-      }),
-      // Re-apply theme on hydration from localStorage
+      partialize: (s) => ({ activeDeckId: s.activeDeckId, settings: s.settings }),
       onRehydrateStorage: () => (state) => {
         if (state?.settings?.theme) applyTheme(state.settings.theme)
       },
