@@ -45,7 +45,16 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
   const exampleKeys = ['word']
   blueprint.forEach(f => {
     exampleKeys.push(f.key)
-    ;(f.phonetics || []).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
+    let phonetics = f.phonetics
+
+    phonetics = phonetics
+      .replace(/^{/, '[')    // Replace the starting curly brace with a square bracket
+      .replace(/}$/, ']')    // Replace the ending curly brace with a square bracket
+      .replace(/, /g, ',')   // Ensure there's no space after commas if there's one
+
+    // Now parse it as a JSON array
+    phonetics = JSON.parse(phonetics) || []
+    phonetics.forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
   })
 
   return `You are a language learning assistant generating flashcard data.
