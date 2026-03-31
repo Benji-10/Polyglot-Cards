@@ -1,7 +1,6 @@
 import { requireUser, json, error, handleCors } from './_db.js'
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
 function buildPrompt(targetLanguage, blueprint, vocabBatch) {
   const fieldLines = blueprint.map(f => {
     const lines = [`  - "${f.key}": ${f.description || f.label}`]
