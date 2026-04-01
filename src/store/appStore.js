@@ -324,7 +324,7 @@ export function applyTheme(name, customVars) {
   Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
 
   const accentPrimary = vars['--accent-primary'] || '#7c6af0'
-  const border = vars['--border'] || '#2a2a5a'
+  const border = vars['--bg-surface'] || '#2a2a5a'
   
   // Get the SVG favicon as text
   fetch("/images/favicon.svg")
