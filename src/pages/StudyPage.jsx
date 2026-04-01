@@ -27,7 +27,7 @@ import RubyText from '../components/shared/RubyText'
 export default function StudyPage() {
   const { deckId, mode } = useParams()
   const navigate = useNavigate()
-  const { settings } = useAppStore()
+  const { settings, sessionConfigs, saveSessionConfig } = useAppStore()
   const [sessionConfig, setSessionConfig] = useState(null)
   const sessionModeRef = useRef(null)
 
@@ -70,8 +70,13 @@ export default function StudyPage() {
         dueCards={dueCards}
         blueprint={blueprint}
         settings={settings}
+        savedConfig={sessionConfigs?.[deckId]}
         stats={stats}
-        onStart={(cfg) => { sessionModeRef.current = mode; setSessionConfig(cfg) }}
+        onStart={(cfg) => {
+          sessionModeRef.current = mode
+          saveSessionConfig(deckId, cfg)
+          setSessionConfig(cfg)
+        }}
         onBack={() => navigate('/')}
       />
     )
@@ -94,17 +99,16 @@ export default function StudyPage() {
 // ─────────────────────────────────────────────
 // SESSION SETUP
 // ─────────────────────────────────────────────
-function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, stats, onStart, onBack }) {
+function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, savedConfig, stats, onStart, onBack }) {
   const exampleField = blueprint.find(f => f.field_type === 'example')
-  // Determine which source field to use for source→target (definition or English gloss)
   const sourceField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading') || blueprint[0]
 
   const [config, setConfig] = useState({
-    batchSize: settings.defaultBatchSize || 20,
-    cardPool: 'all',
-    randomise: true,
-    direction: 'targetToSource',   // 'targetToSource' | 'sourceToTarget'
-    interaction: 'passive',         // 'passive' | 'typing' | 'multipleChoice' | 'cloze'
+    batchSize: savedConfig?.batchSize ?? settings.defaultBatchSize ?? 20,
+    cardPool: savedConfig?.cardPool ?? 'all',
+    randomise: savedConfig?.randomise ?? true,
+    direction: savedConfig?.direction ?? 'targetToSource',
+    interaction: savedConfig?.interaction ?? 'passive',
   })
 
   const availableCount = (() => {
