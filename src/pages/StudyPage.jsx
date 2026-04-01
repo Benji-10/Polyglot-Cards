@@ -358,7 +358,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     const expected = getAnswer(currentCard, config.direction, blueprint, deck)
     const result = fuzzyMatch(typingAnswer, expected || '')
     setTypingResult({ ...result, answer: expected })
-    if (result.correct) setTimeout(() => advance(3), 1000)
+    // Always flip to show full card after checking
+    setTimeout(() => setFlipped(true), result.correct ? 400 : 600)
+    if (result.correct) setTimeout(() => advance(3), 2000)
   }
 
   const submitCloze = () => {
@@ -366,7 +368,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     const clozeData = parseCloze(currentCard.fields?.[exampleField?.key] || '')
     const result = fuzzyMatch(clozeAnswer, clozeData.answer || '')
     setClozeResult({ ...result, answer: clozeData.answer })
-    if (result.correct) setTimeout(() => advance(3), 1000)
+    if (result.correct) setTimeout(() => advance(3), 1500)
   }
 
   const selectChoice = (choice) => {
@@ -374,7 +376,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     const correct = getAnswer(currentCard, config.direction, blueprint, deck)
     const isCorrect = choice === correct
     setChoiceSelected(choice)
-    setTimeout(() => advance(isCorrect ? 3 : 1), 900)
+    // Flip to show full card briefly before advancing
+    setTimeout(() => setFlipped(true), 400)
+    setTimeout(() => advance(isCorrect ? 3 : 1), 1800)
   }
 
   useStudyKeyboard({
@@ -427,7 +431,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         {/* PASSIVE MODE */}
         {config.interaction === 'passive' && (
           <>
-            <PassiveCard card={card} front={front} blueprint={blueprint} flipped={flipped} config={config} deck={deck} onFlip={() => setFlipped(true)} />
+            <PassiveCard card={card} front={front} blueprint={blueprint} flipped={flipped} deck={deck} onFlip={() => setFlipped(true)} />
             <div className="w-full max-w-lg">
               {!flipped ? (
                 <button className="btn-primary w-full py-3 text-base" onClick={() => setFlipped(true)}>Reveal →</button>
@@ -461,33 +465,38 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
         {/* TYPING MODE */}
         {config.interaction === 'typing' && (
-          <div className="w-full max-w-lg">
-            <PromptCard front={front} config={config} deck={deck} />
-            <div className="card p-5 mt-4">
-              <div className="section-title mb-2">Type the {config.direction === 'targetToSource' ? (deck?.source_language || 'English') : deck?.target_language} answer</div>
+          <div className="w-full max-w-lg space-y-4">
+            {/* Before answering: show prompt. After: show flipped card */}
+            {!typingResult
+              ? <PromptCard front={front} deck={deck} />
+              : <PassiveCard card={card} front={front} blueprint={blueprint} flipped={flipped} deck={deck} onFlip={() => {}} />
+            }
+            <div className="card p-5">
+              <div className="section-title mb-2">
+                Type the {config.direction === 'targetToSource' ? (deck?.source_language || 'English') : deck?.target_language} answer
+              </div>
               <input
-                className={`input text-base ${typingResult ? (typingResult.correct ? 'border-green-500' : '') : ''}`}
+                className="input text-base"
                 style={{ borderColor: typingResult ? (typingResult.correct ? 'var(--accent-secondary)' : 'var(--accent-danger)') : undefined }}
                 value={typingAnswer}
                 onChange={e => !typingResult && setTypingAnswer(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !typingResult && submitTyping()}
                 placeholder="Your answer..."
                 disabled={!!typingResult}
-                autoFocus
+                autoFocus={!typingResult}
               />
-              {typingResult && (
-                <div className="mt-3">
+              {typingResult ? (
+                <div className="mt-3 flex items-center justify-between gap-3">
                   <div className="text-sm font-medium" style={{ color: typingResult.correct ? 'var(--accent-secondary)' : 'var(--accent-danger)' }}>
                     {typingResult.correct
                       ? `✓ Correct! (${Math.round(typingResult.similarity * 100)}%)`
                       : `✗ Answer: ${typingResult.answer}`}
                   </div>
                   {!typingResult.correct && (
-                    <button className="btn-secondary text-sm mt-3 w-full" onClick={() => advance(1)}>Next →</button>
+                    <button className="btn-secondary text-sm" onClick={() => advance(1)}>Next →</button>
                   )}
                 </div>
-              )}
-              {!typingResult && (
+              ) : (
                 <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
               )}
             </div>
@@ -496,9 +505,12 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
         {/* MULTIPLE CHOICE MODE */}
         {config.interaction === 'multipleChoice' && (
-          <div className="w-full max-w-lg">
-            <PromptCard front={front} config={config} deck={deck} />
-            <div className="grid grid-cols-1 gap-2 mt-4">
+          <div className="w-full max-w-lg space-y-4">
+            {choiceSelected !== null
+              ? <PassiveCard card={card} front={front} blueprint={blueprint} flipped={flipped} deck={deck} onFlip={() => {}} />
+              : <PromptCard front={front} deck={deck} />
+            }
+            <div className="grid grid-cols-1 gap-2">
               {choices.map((choice, i) => {
                 const correct = choice === getAnswer(card, config.direction, blueprint, deck)
                 const isSelected = choiceSelected === choice
@@ -529,10 +541,30 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         {config.interaction === 'cloze' && (
           <div className="w-full max-w-lg">
             {clozeData.hasCloze ? (
-              <div className="card p-6">
-                <div className="section-title mb-4">Complete the sentence</div>
-                <div className="text-center leading-loose mb-5"
-                  style={{ color: 'var(--text-primary)', fontSize: '16px', fontFamily: fontForText(clozeData.before + clozeData.after), maxWidth: '90%', margin: '0 auto' }}>
+              <div className="card p-6 space-y-4">
+                {/* Context: show the word being tested + definition hint */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="section-title mb-1">Complete the sentence</div>
+                    <div className="font-display text-2xl font-bold" style={{ color: 'var(--accent-primary)', fontFamily: fontForText(card.word) }}>
+                      {card.word}
+                    </div>
+                  </div>
+                  {/* Show definition/reading as hint if available */}
+                  {(() => {
+                    const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
+                    const hint = defField ? card.fields?.[defField.key] : null
+                    return hint ? (
+                      <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>
+                        {hint}
+                      </div>
+                    ) : null
+                  })()}
+                </div>
+
+                {/* Sentence with blank */}
+                <div className="text-center leading-loose py-2"
+                  style={{ color: 'var(--text-primary)', fontSize: '18px', fontFamily: fontForText(clozeData.before + clozeData.after) }}>
                   {clozeData.before}
                   <input
                     className={`cloze-input ${clozeResult ? (clozeResult.correct ? 'correct' : 'incorrect') : ''}`}
@@ -545,8 +577,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   />
                   {clozeData.after}
                 </div>
+
                 {clozeResult && (
-                  <div className="text-sm text-center font-medium mb-3"
+                  <div className="text-sm text-center font-medium"
                     style={{ color: clozeResult.correct ? 'var(--accent-secondary)' : 'var(--accent-danger)' }}>
                     {clozeResult.correct
                       ? `✓ Correct! (${Math.round(clozeResult.similarity * 100)}%)`
@@ -565,7 +598,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               </div>
             ) : (
               <div className="card p-6 text-center" style={{ color: 'var(--text-muted)' }}>
-                This card has no example sentence. <button className="btn-ghost text-sm" onClick={() => advance(3)}>Skip →</button>
+                This card has no example sentence.
+                <button className="btn-ghost text-sm ml-2" onClick={() => advance(3)}>Skip →</button>
               </div>
             )}
           </div>
@@ -597,7 +631,7 @@ function getAnswer(card, direction, blueprint, deck) {
 }
 
 // ── PassiveCard — 3D flip card ─────────────────────────────
-function PassiveCard({ card, front, blueprint, flipped, config, deck, onFlip }) {
+function PassiveCard({ card, front, blueprint, flipped, deck, onFlip }) {
   const frontField = blueprint.find(f => f.show_on_front)
 
   return (
@@ -651,7 +685,7 @@ function PassiveCard({ card, front, blueprint, flipped, config, deck, onFlip }) 
 }
 
 // ── PromptCard — non-flipping, just shows the prompt ───────
-function PromptCard({ front, config, deck }) {
+function PromptCard({ front, deck }) {
   return (
     <div className="card-elevated flex flex-col items-center justify-center p-8 rounded-2xl" style={{ minHeight: '140px' }}>
       <div className="section-title mb-3">{front.label}</div>
