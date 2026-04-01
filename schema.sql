@@ -9,11 +9,15 @@ CREATE TABLE IF NOT EXISTS decks (
   user_id TEXT NOT NULL,
   name TEXT NOT NULL,
   target_language TEXT NOT NULL,
+  source_language TEXT DEFAULT 'English',
   description TEXT,
   card_front_field TEXT DEFAULT 'auto',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration: add source_language if upgrading an existing database
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS source_language TEXT DEFAULT 'English';
 
 CREATE INDEX IF NOT EXISTS decks_user_id ON decks(user_id);
 
@@ -23,12 +27,17 @@ CREATE TABLE IF NOT EXISTS blueprint_fields (
   deck_id UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
   key TEXT NOT NULL,           -- e.g. 'japanese', 'chinese', 'example', 'hanja'
   label TEXT NOT NULL,         -- human display name
-  description TEXT NOT NULL,   -- sent to AI so it knows what to fill in
+  description TEXT NOT NULL DEFAULT '',   -- sent to AI so it knows what to fill in
   field_type TEXT DEFAULT 'text', -- 'text' | 'example' (example triggers cloze)
   position INTEGER DEFAULT 0,
   show_on_front BOOLEAN DEFAULT false,
+  phonetics JSONB DEFAULT '[]', -- e.g. ['furigana','pinyin','ipa']
   UNIQUE(deck_id, key)
 );
+
+-- Migration: safe to run against an existing database
+ALTER TABLE blueprint_fields ADD COLUMN IF NOT EXISTS phonetics JSONB DEFAULT '[]';
+ALTER TABLE blueprint_fields ALTER COLUMN description SET DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS blueprint_fields_deck ON blueprint_fields(deck_id);
 

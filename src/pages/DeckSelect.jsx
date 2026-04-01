@@ -9,14 +9,13 @@ import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
 import { getLanguageFlag, LANGUAGES } from '../lib/utils'
 
-const EMPTY_FORM = { name: '', target_language: 'Korean', description: '', card_front_field: 'auto' }
-
 export default function DeckSelect() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { activeDeckId, setActiveDeckId } = useAppStore()
+  const { activeDeckId, setActiveDeckId, settings } = useAppStore()
   const toast = useToast()
-  const [modal, setModal] = useState(null) // null | 'create' | deck-object (for edit)
+  const [modal, setModal] = useState(null)
+  const defaultSource = settings.defaultSourceLanguage || 'English'
 
   const { data: decks = [], isLoading } = useQuery({
     queryKey: ['decks'],
@@ -71,9 +70,7 @@ export default function DeckSelect() {
       <div className="flex items-end justify-between mb-8">
         <div>
           <div className="section-title mb-1">Your Library</div>
-          <h1 className="font-display text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            Decks
-          </h1>
+          <h1 className="font-display text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>Decks</h1>
         </div>
         <button className="btn-primary flex items-center gap-2" onClick={() => setModal('create')}>
           + New Deck
@@ -98,23 +95,20 @@ export default function DeckSelect() {
               onDelete={(e) => handleDelete(deck, e)}
             />
           ))}
-
-          {/* Add new deck button */}
           <button
             className="h-44 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all hover:border-purple-500 hover:bg-white/[0.02]"
             style={{ borderColor: 'var(--border)' }}
-            onClick={() => setModal('create')}
-          >
+            onClick={() => setModal('create')}>
             <span className="text-3xl" style={{ color: 'var(--text-muted)' }}>+</span>
             <span className="text-sm" style={{ color: 'var(--text-muted)' }}>New Deck</span>
           </button>
         </div>
       )}
 
-      {/* Create / Edit Modal */}
       {modal && (
         <DeckFormModal
           deck={modal === 'create' ? null : modal}
+          defaultSource={defaultSource}
           onClose={() => setModal(null)}
           onSave={(data) => {
             if (modal === 'create') createMutation.mutate(data)
@@ -127,8 +121,6 @@ export default function DeckSelect() {
   )
 }
 
-// ── Sub-components ────────────────────────────
-
 function DeckCard({ deck, isActive, onSelect, onEdit, onDelete }) {
   const { stats } = useDeckStats(deck.id)
   const flag = getLanguageFlag(deck.target_language)
@@ -137,28 +129,22 @@ function DeckCard({ deck, isActive, onSelect, onEdit, onDelete }) {
     <div
       className="card p-5 cursor-pointer group relative transition-all duration-200 hover:translate-y-[-2px]"
       style={{ borderColor: isActive ? 'var(--accent-primary)' : undefined, boxShadow: isActive ? '0 0 0 1px var(--accent-primary)' : undefined }}
-      onClick={onSelect}
-    >
+      onClick={onSelect}>
       {isActive && (
-        <span
-          className="absolute top-3 right-3 text-xs px-2 py-0.5 rounded-full font-medium"
-          style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)' }}
-        >
-          Active
-        </span>
+        <span className="absolute top-3 right-3 text-xs px-2 py-0.5 rounded-full font-medium"
+          style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)' }}>Active</span>
       )}
-
       <div className="text-3xl mb-3">{flag}</div>
       <div className="font-display font-semibold text-base leading-tight mb-1" style={{ color: 'var(--text-primary)' }}>
         {deck.name}
       </div>
-      <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{deck.target_language}</div>
+      <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+        {deck.source_language || 'English'} → {deck.target_language}
+      </div>
       {deck.description && (
         <div className="text-xs mb-3 truncate" style={{ color: 'var(--text-muted)' }}>{deck.description}</div>
       )}
-
-      {/* Stats */}
-      {stats.total > 0 && (
+      {stats.total > 0 ? (
         <div className="mt-3">
           <DeckStatsBar stats={stats} />
           {stats.due > 0 && (
@@ -167,15 +153,12 @@ function DeckCard({ deck, isActive, onSelect, onEdit, onDelete }) {
             </div>
           )}
         </div>
-      )}
-      {stats.total === 0 && (
+      ) : (
         <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>No cards yet</div>
       )}
-
-      {/* Hover actions */}
       <div className="absolute bottom-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-        <button className="btn-ghost p-1.5 text-xs" onClick={onEdit} title="Edit deck">✏</button>
-        <button className="btn-ghost p-1.5 text-xs" style={{ color: 'var(--accent-danger)' }} onClick={onDelete} title="Delete deck">✕</button>
+        <button className="btn-ghost p-1.5 text-xs" onClick={onEdit}>✏</button>
+        <button className="btn-ghost p-1.5 text-xs" style={{ color: 'var(--accent-danger)' }} onClick={onDelete}>✕</button>
       </div>
     </div>
   )
@@ -186,47 +169,50 @@ function EmptyState({ onCreate }) {
     <div className="text-center py-20">
       <div className="text-5xl mb-4">📖</div>
       <div className="font-display text-xl font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>No decks yet</div>
-      <div className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>
-        Create your first deck, configure a blueprint, and start learning.
-      </div>
+      <div className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>Create your first deck, configure a blueprint, and start learning.</div>
       <button className="btn-primary" onClick={onCreate}>Create your first deck</button>
     </div>
   )
 }
 
-function DeckFormModal({ deck, onClose, onSave, saving }) {
+function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
   const [form, setForm] = useState(
     deck
-      ? { name: deck.name, target_language: deck.target_language, description: deck.description || '', card_front_field: deck.card_front_field || 'auto' }
-      : { ...EMPTY_FORM }
+      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto' }
+      : { name: '', target_language: 'Korean', source_language: defaultSource || 'English', description: '', card_front_field: 'auto' }
   )
 
   const isEdit = !!deck
-  const flag = getLanguageFlag(form.target_language)
+  const targetFlag = getLanguageFlag(form.target_language)
+  const sourceFlag = getLanguageFlag(form.source_language)
 
   return (
     <Modal title={isEdit ? 'Edit Deck' : 'New Deck'} onClose={onClose}>
       <div className="space-y-4">
         <div>
           <label className="section-title block mb-1.5">Deck Name</label>
-          <input
-            className="input"
-            value={form.name}
+          <input className="input" value={form.name}
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            placeholder="e.g. Korean Vocabulary"
-            autoFocus
-          />
+            placeholder="e.g. Korean Vocabulary" autoFocus />
         </div>
 
         <div>
-          <label className="section-title block mb-1.5">Target Language</label>
+          <label className="section-title block mb-1.5">Source Language (you know this)</label>
           <div className="flex gap-2">
-            <span className="text-2xl flex items-center">{flag}</span>
-            <select
-              className="input flex-1"
-              value={form.target_language}
-              onChange={e => setForm(f => ({ ...f, target_language: e.target.value }))}
-            >
+            <span className="text-2xl flex items-center">{sourceFlag}</span>
+            <select className="input flex-1" value={form.source_language}
+              onChange={e => setForm(f => ({ ...f, source_language: e.target.value }))}>
+              {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="section-title block mb-1.5">Target Language (you're learning this)</label>
+          <div className="flex gap-2">
+            <span className="text-2xl flex items-center">{targetFlag}</span>
+            <select className="input flex-1" value={form.target_language}
+              onChange={e => setForm(f => ({ ...f, target_language: e.target.value }))}>
               {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
@@ -234,36 +220,25 @@ function DeckFormModal({ deck, onClose, onSave, saving }) {
 
         <div>
           <label className="section-title block mb-1.5">Description <span style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-          <input
-            className="input"
-            value={form.description}
+          <input className="input" value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-            placeholder="What is this deck for?"
-          />
+            placeholder="What is this deck for?" />
         </div>
 
         <div>
           <label className="section-title block mb-1.5">Card front shows</label>
-          <select
-            className="input"
-            value={form.card_front_field}
-            onChange={e => setForm(f => ({ ...f, card_front_field: e.target.value }))}
-          >
+          <select className="input" value={form.card_front_field}
+            onChange={e => setForm(f => ({ ...f, card_front_field: e.target.value }))}>
             <option value="auto">Auto (word only)</option>
             <option value="word+hint">Word + first show_on_front field</option>
           </select>
-          <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            You can also mark individual blueprint fields as "show on front".
-          </div>
         </div>
 
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button
-            className="btn-primary flex-1"
+          <button className="btn-primary flex-1"
             disabled={!form.name.trim() || saving}
-            onClick={() => onSave(form)}
-          >
+            onClick={() => onSave(form)}>
             {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Deck →'}
           </button>
         </div>

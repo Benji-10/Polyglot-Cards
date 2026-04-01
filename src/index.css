@@ -179,7 +179,66 @@
     height: 100%;
     border-radius: 2px;
     background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
-    transition: width 0.4s ease;
+    /* No CSS transition — RAF drives width directly via DOM ref */
+  }
+  /* Import progress bar specifically — also no transition */
+  .import-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+  }
+
+  /* Custom checkbox */
+  input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    border: 1.5px solid var(--border);
+    background: var(--bg-surface);
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+  input[type="checkbox"]:checked {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+  }
+  input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1.5px;
+    width: 5px;
+    height: 9px;
+    border: 2px solid white;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+  }
+  input[type="checkbox"]:hover:not(:checked) {
+    border-color: var(--accent-primary);
+  }
+
+  /* Collapsible panel transition */
+  .collapsible-panel {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+  }
+  .collapsible-panel.open {
+    grid-template-rows: 1fr;
+  }
+  .collapsible-panel > .collapsible-inner {
+    overflow: hidden;
+  }
+
+  /* Reorder transition for list items */
+  .reorder-item {
+    transition: transform 0.2s ease, opacity 0.2s ease;
   }
 
   /* Shimmer loading */

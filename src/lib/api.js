@@ -49,6 +49,8 @@ export const api = {
   updateCard: (id, data) => fetchWithAuth(`/cards?id=${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteCard: (id) => fetchWithAuth(`/cards?id=${id}`, { method: 'DELETE' }),
   batchCreateCards: (cards) => fetchWithAuth('/cards-batch', { method: 'POST', body: JSON.stringify({ cards }) }),
+  // Merge partial field data into existing cards by word match
+  patchCards: (deckId, patches) => fetchWithAuth('/cards-patch', { method: 'POST', body: JSON.stringify({ deckId, patches }) }),
 
   // SRS / review
   getSRSCards: (deckId) => fetchWithAuth(`/srs?deckId=${deckId}`),

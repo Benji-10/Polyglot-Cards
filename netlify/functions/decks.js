@@ -17,13 +17,13 @@ export const handler = async (event) => {
     }
 
     if (method === 'POST') {
-      const { name, target_language, description, card_front_field } = JSON.parse(event.body)
+      const { name, target_language, source_language, description, card_front_field } = JSON.parse(event.body)
       if (!name || !target_language) return error('name and target_language required')
 
       const { rows } = await query(
-        `INSERT INTO decks (user_id, name, target_language, description, card_front_field)
-         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-        [userId, name, target_language, description || '', card_front_field || 'auto']
+        `INSERT INTO decks (user_id, name, target_language, source_language, description, card_front_field)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [userId, name, target_language, source_language || 'English', description || '', card_front_field || 'auto']
       )
       return json(rows[0], 201)
     }
@@ -31,14 +31,14 @@ export const handler = async (event) => {
     if (method === 'PUT') {
       const id = params.id
       if (!id) return error('id required')
-      const { name, target_language, description, card_front_field } = JSON.parse(event.body)
+      const { name, target_language, source_language, description, card_front_field } = JSON.parse(event.body)
 
       const { rows } = await query(
         `UPDATE decks SET name=COALESCE($1,name), target_language=COALESCE($2,target_language),
-         description=COALESCE($3,description), card_front_field=COALESCE($4,card_front_field),
-         updated_at=NOW()
-         WHERE id=$5 AND user_id=$6 RETURNING *`,
-        [name, target_language, description, card_front_field, id, userId]
+         source_language=COALESCE($3,source_language), description=COALESCE($4,description),
+         card_front_field=COALESCE($5,card_front_field), updated_at=NOW()
+         WHERE id=$6 AND user_id=$7 RETURNING *`,
+        [name, target_language, source_language, description, card_front_field, id, userId]
       )
       if (!rows.length) return error('Deck not found', 404)
       return json(rows[0])

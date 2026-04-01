@@ -200,7 +200,7 @@ export default function AppShell() {
           )}
         </header>
 
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto min-h-0">
           <Outlet />
         </main>
       </div>
