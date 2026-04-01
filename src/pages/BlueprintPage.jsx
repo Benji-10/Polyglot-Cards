@@ -37,21 +37,34 @@ export const EXTRA_OPTIONS = [
 ]
 
 // ── usePredictiveProgress ──────────────────────────────────
-// Ticks the bar linearly from batchStart% → ceiling% over estimated ms.
-// No easing — constant rate so the bar moves steadily the whole time.
-// completeBatch() snaps to the ceiling and records actual duration.
+// Drives the progress bar by updating a DOM element directly via a ref,
+// bypassing React's state batching which defers updates during async awaits.
+// The text % uses React state (updates every ~100ms to avoid jank).
 // ──────────────────────────────────────────────────────────
 function usePredictiveProgress() {
   const rafRef         = useRef(null)
-  const displayRef     = useRef(0)
-  const [display, setDisplay] = useState(0)
+  const barRef         = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
+  const valueRef       = useRef(0)      // current % value (ground truth)
+  const [displayPct, setDisplayPct] = useState(0) // for the text label only
 
   const batchTimesRef  = useRef([])
-  const batchStartRef  = useRef(null)   // performance.now() when startBatch was called
-  const fromRef        = useRef(0)      // % where this batch started
-  const ceilingRef     = useRef(0)      // % where this batch ends
+  const batchStartRef  = useRef(null)
+  const fromRef        = useRef(0)
+  const ceilingRef     = useRef(0)
   const durationRef    = useRef(INITIAL_ESTIMATE_MS)
   const totalRef       = useRef(1)
+  const lastTextRef    = useRef(0)      // last time we updated text state
+
+  const updateBar = useCallback((pct) => {
+    valueRef.current = pct
+    if (barRef.current) barRef.current.style.width = `${pct}%`
+    // Update text label at most every 100ms to avoid React thrashing
+    const now = performance.now()
+    if (now - lastTextRef.current > 100) {
+      lastTextRef.current = now
+      setDisplayPct(Math.round(pct))
+    }
+  }, [])
 
   const tick = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -59,32 +72,30 @@ function usePredictiveProgress() {
     const step = () => {
       const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
       const t = Math.min(elapsed / durationRef.current, 1)
-      // Linear — no easing. Always moves at constant speed.
-      const value = Math.min(fromRef.current + (ceilingRef.current - fromRef.current) * t, ceilingRef.current)
-      displayRef.current = value
-      setDisplay(value)
+      const value = fromRef.current + (ceilingRef.current - fromRef.current) * t
+      updateBar(value)
       if (t < 1) rafRef.current = requestAnimationFrame(step)
     }
 
     rafRef.current = requestAnimationFrame(step)
-  }, [])
+  }, [updateBar])
 
   const reset = useCallback((totalBatches) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     totalRef.current       = Math.max(totalBatches, 1)
-    displayRef.current     = 0
+    valueRef.current       = 0
     batchTimesRef.current  = []
     batchStartRef.current  = null
     fromRef.current        = 0
     ceilingRef.current     = 0
-    setDisplay(0)
+    if (barRef.current) barRef.current.style.width = '0%'
+    setDisplayPct(0)
   }, [])
 
   const startBatch = useCallback((batchIndex) => {
     batchStartRef.current = performance.now()
     fromRef.current    = (batchIndex / totalRef.current) * 100
     ceilingRef.current = ((batchIndex + 1) / totalRef.current) * 100
-    // Rolling average of previous batch durations, or initial estimate
     const times = batchTimesRef.current
     durationRef.current = times.length > 0
       ? times.reduce((a, b) => a + b, 0) / times.length
@@ -95,14 +106,13 @@ function usePredictiveProgress() {
   const completeBatch = useCallback(() => {
     const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
     batchTimesRef.current = [...batchTimesRef.current, elapsed]
-    // Cancel pending animation and snap to ceiling
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    displayRef.current = ceilingRef.current
-    setDisplay(ceilingRef.current)
-  }, [])
+    updateBar(ceilingRef.current)
+    setDisplayPct(Math.round(ceilingRef.current))
+  }, [updateBar])
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
-  return { percent: display, reset, startBatch, completeBatch }
+  return { barRef, displayPct, reset, startBatch, completeBatch }
 }
 
 // ── Main component ─────────────────────────────────────────
@@ -346,11 +356,11 @@ export default function BlueprintPage() {
                 </div>
               </div>
               <div className="text-sm font-mono tabular-nums flex-shrink-0" style={{ color: 'var(--accent-primary)' }}>
-                {Math.round(progress.percent)}%
+                {progress.displayPct}%
               </div>
             </div>
             <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progress.percent}%` }} />
+              <div ref={progress.barRef} className="import-progress-fill" style={{ width: '0%' }} />
             </div>
             <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
               Estimated time adapts based on completed batches
