@@ -546,20 +546,17 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="section-title mb-1">Complete the sentence</div>
-                    <div className="font-display text-2xl font-bold" style={{ color: 'var(--accent-primary)', fontFamily: fontForText(card.word) }}>
-                      {card.word}
-                    </div>
+                    {/* Show definition/reading as hint if available */}
+                    {(() => {
+                      const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
+                      const hint = defField ? card.fields?.[defField.key] : null
+                      return hint ? (
+                        <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>
+                          {hint}
+                        </div>
+                      ) : null
+                    })()}
                   </div>
-                  {/* Show definition/reading as hint if available */}
-                  {(() => {
-                    const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
-                    const hint = defField ? card.fields?.[defField.key] : null
-                    return hint ? (
-                      <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>
-                        {hint}
-                      </div>
-                    ) : null
-                  })()}
                 </div>
 
                 {/* Sentence with blank */}
