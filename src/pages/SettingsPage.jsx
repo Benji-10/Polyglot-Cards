@@ -240,39 +240,38 @@ function QuickAddSection({ settings, updateSettings }) {
 
 function QuickAddRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, isLast }) {
   return (
-    <div className="flex items-center gap-2 p-3 rounded-xl" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-      {/* Reorder */}
-      <div className="flex flex-col gap-0.5 flex-shrink-0">
-        <button disabled={isFirst}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
-        <button disabled={isLast}   className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+    <div className="rounded-xl p-3" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+      {/* Row 1: controls + reorder */}
+      <div className="flex items-center gap-2 mb-2">
+        {/* Reorder */}
+        <div className="flex gap-0.5 flex-shrink-0">
+          <button disabled={isFirst}  className="btn-ghost p-1 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+          <button disabled={isLast}   className="btn-ghost p-1 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+        </div>
+
+        <input className="input text-xs py-1 min-w-0 flex-1" value={field.label}
+          onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
+
+        <input className="input text-xs py-1 w-24 font-mono flex-shrink-0" value={field.key}
+          onChange={e => onUpdate({ key: e.target.value.replace(/\s/g, '_').toLowerCase() })} placeholder="key" />
+
+        <select className="input text-xs py-1 w-28 flex-shrink-0" value={field.field_type}
+          onChange={e => onUpdate({ field_type: e.target.value })}>
+          <option value="text">Text</option>
+          <option value="example">Example</option>
+        </select>
+
+        <label className="flex items-center gap-1.5 text-xs flex-shrink-0 cursor-pointer" style={{ color: 'var(--text-muted)' }}>
+          <input type="checkbox" checked={!!field.show_on_front} onChange={e => onUpdate({ show_on_front: e.target.checked })} />
+          Front
+        </label>
+
+        <button className="btn-ghost p-1 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
       </div>
 
-      {/* Label */}
-      <input className="input text-xs py-1 w-32 flex-shrink-0" value={field.label}
-        onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
-
-      {/* Key */}
-      <input className="input text-xs py-1 w-24 font-mono flex-shrink-0" value={field.key}
-        onChange={e => onUpdate({ key: e.target.value.replace(/\s/g, '_').toLowerCase() })} placeholder="key" />
-
-      {/* Type */}
-      <select className="input text-xs py-1 flex-shrink-0" value={field.field_type}
-        onChange={e => onUpdate({ field_type: e.target.value })}>
-        <option value="text">Text</option>
-        <option value="example">Example</option>
-      </select>
-
-      {/* Description */}
-      <input className="input text-xs py-1 flex-1 min-w-0" value={field.description || ''}
-        onChange={e => onUpdate({ description: e.target.value })} placeholder="AI hint for this field..." />
-
-      {/* Show on front */}
-      <label className="flex items-center gap-1 text-xs flex-shrink-0 cursor-pointer" style={{ color: 'var(--text-muted)' }}>
-        <input type="checkbox" checked={!!field.show_on_front} onChange={e => onUpdate({ show_on_front: e.target.checked })} />
-        Front
-      </label>
-
-      <button className="btn-ghost p-1 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
+      {/* Row 2: AI hint full width */}
+      <input className="input text-xs py-1.5 w-full" value={field.description || ''}
+        onChange={e => onUpdate({ description: e.target.value })} placeholder="AI hint — describe what Gemini should put in this field" />
     </div>
   )
 }
@@ -289,13 +288,36 @@ function Section({ title, children }) {
 
 function CollapsibleSection({ title, children, defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen)
+
   return (
     <div className="mb-8">
-      <button className="w-full flex items-center justify-between mb-4 group" onClick={() => setOpen(o => !o)}>
-        <h2 className="font-display font-semibold text-lg" style={{ color: 'var(--text-primary)' }}>{title}</h2>
-        <span className="text-sm transition-transform" style={{ color: 'var(--text-muted)', display: 'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
-      </button>
-      {open && <div className="card p-5 space-y-5">{children}</div>}
+      <div
+        className="card cursor-pointer select-none"
+        style={{ borderRadius: open ? '16px 16px 0 0' : '16px', borderBottom: open ? 'none' : undefined, transition: 'border-radius 0.3s ease' }}
+        onClick={() => setOpen(o => !o)}>
+        <div className="flex items-center justify-between px-5 py-4">
+          <h2 className="font-display font-semibold text-lg" style={{ color: 'var(--text-primary)' }}>{title}</h2>
+          <span
+            style={{
+              color: 'var(--text-muted)',
+              display: 'inline-block',
+              transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
+              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+              fontSize: '18px',
+            }}>
+            ▾
+          </span>
+        </div>
+      </div>
+      <div className={`collapsible-panel ${open ? 'open' : ''}`}
+        style={{ borderRadius: '0 0 16px 16px', overflow: 'hidden' }}>
+        <div className="collapsible-inner">
+          <div className="card p-5 space-y-5"
+            style={{ borderRadius: '0 0 16px 16px', borderTop: 'none', marginTop: 0 }}>
+            {children}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
