@@ -551,7 +551,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                       const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
                       const hint = defField ? card.fields?.[defField.key] : null
                       return hint ? (
-                        <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>
+                        <div className="font-display text-2xl font-bold" style={{ fontFamily: fontForText(card.word) }}>
                           {hint}
                         </div>
                       ) : null
