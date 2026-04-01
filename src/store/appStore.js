@@ -322,6 +322,31 @@ export function applyTheme(name, customVars) {
   }
   const root = document.documentElement
   Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
+
+  const accentPrimary = vars['--accent-primary'] || '#7c6af0'
+  const border = vars['--border'] || '#2a2a5a'
+  
+  // Get the SVG favicon as text
+  fetch("/images/favicon.svg")
+    .then((response) => response.text())
+    .then((svgText) => {
+      // Replace the fill colors in the SVG with the accent and border colors
+      const faviconSvg = svgText.replace(
+        /fill="#000"/g,
+        `fill="${accentPrimary}"`
+      ).replace(
+        /<rect[^>]+fill="#000"/g,
+        `<rect width="100" height="100" rx="20" fill="${border}"/>`
+      )
+
+      // Create a Blob URL for the updated SVG content
+      const blob = new Blob([faviconSvg], { type: "image/svg+xml" });
+      const url = URL.createObjectURL(blob)
+
+      // Update the favicon href to point to the new dynamic SVG
+      const favicon = document.getElementById("favicon")
+      favicon.href = url
+    })
 }
 
 // Default quick-add field suggestions shown in Blueprint page
