@@ -16,6 +16,13 @@ const THEMES = [
   { id: 'cyber',    label: 'Cyber',    swatch: ['#0a0f1f', '#00e5ff', '#ff3cac'] },
   { id: 'forest',   label: 'Forest',   swatch: ['#0b1f14', '#22c55e', '#84cc16'] },
   { id: 'sunset',   label: 'Sunset',   swatch: ['#1a0f0a', '#f97316', '#ec4899'] },
+  // New ones
+  { id: 'ocean',    label: 'Ocean',    swatch: ['#0a192f', '#3b82f6', '#22d3ee'] },
+  { id: 'lavender', label: 'Lavender', swatch: ['#f5f3ff', '#8b5cf6', '#c084fc'] },
+  { id: 'rose',     label: 'Rose',     swatch: ['#fff1f2', '#f43f5e', '#fb7185'] },
+  { id: 'amber',    label: 'Amber',    swatch: ['#1c1917', '#f59e0b', '#fbbf24'] },
+  // Custom placeholder
+  { id: 'custom',   label: 'Custom',   swatch: ['#111111', '#888888', '#ffffff'] },
 ];
 
 export default function SettingsPage() {
