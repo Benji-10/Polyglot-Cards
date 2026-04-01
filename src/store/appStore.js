@@ -330,22 +330,20 @@ export function applyTheme(name, customVars) {
   fetch("/images/favicon.svg")
     .then((response) => response.text())
     .then((svgText) => {
-      // Replace the fill colors in the SVG with the accent and border colors
-      const faviconSvg = svgText.replace(
-        /fill="#000"/g,
-        `fill="${accentPrimary}"`
-      ).replace(
-        /<rect[^>]+fill="#000"/g,
-        `<rect width="100" height="100" rx="20" fill="${border}"/>`
-      )
+      // Parse the SVG text into DOM elements for easier manipulation
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svgText, "image/svg+xml");
 
-      console.log(faviconSvg)
+      // Find the elements by their data-fill attributes
+      const background = svgDoc.querySelector('[data-fill="background"]');
+      const foreground = svgDoc.querySelector('[data-fill="foreground"]');
+
+      background.setAttribute("fill", border)
+      foreground.setAttribute("fill", accentPrimary)
 
       // Create a Blob URL for the updated SVG content
-      const blob = new Blob([faviconSvg], { type: "image/svg+xml" });
+      const blob = new Blob([svgDoc.documentElement.outerHTML], { type: "image/svg+xml" })
       const url = URL.createObjectURL(blob)
-
-      console.log(blob, url)
 
       // Update the favicon href to point to the new dynamic SVG
       const favicon = document.getElementById("favicon")
