@@ -325,8 +325,6 @@ export function applyTheme(name, customVars) {
 
   const accentPrimary = vars['--accent-primary'] || '#7c6af0'
   const border = vars['--border'] || '#2a2a5a'
-
-  console.log(accentPrimary, border)
   
   // Get the SVG favicon as text
   fetch("/images/favicon.svg")
@@ -341,9 +339,13 @@ export function applyTheme(name, customVars) {
         `<rect width="100" height="100" rx="20" fill="${border}"/>`
       )
 
+      console.log(faviconSvg)
+
       // Create a Blob URL for the updated SVG content
       const blob = new Blob([faviconSvg], { type: "image/svg+xml" });
       const url = URL.createObjectURL(blob)
+
+      console.log(blob, url)
 
       // Update the favicon href to point to the new dynamic SVG
       const favicon = document.getElementById("favicon")
