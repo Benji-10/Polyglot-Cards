@@ -325,6 +325,8 @@ export function applyTheme(name, customVars) {
 
   const accentPrimary = vars['--accent-primary'] || '#7c6af0'
   const border = vars['--border'] || '#2a2a5a'
+
+  console.log(accentPrimary, border)
   
   // Get the SVG favicon as text
   fetch("/images/favicon.svg")
