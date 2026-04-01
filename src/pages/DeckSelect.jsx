@@ -9,14 +9,13 @@ import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
 import { getLanguageFlag, LANGUAGES } from '../lib/utils'
 
-const EMPTY_FORM = { name: '', target_language: 'Korean', source_language: 'English', description: '', card_front_field: 'auto' }
-
 export default function DeckSelect() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { activeDeckId, setActiveDeckId } = useAppStore()
+  const { activeDeckId, setActiveDeckId, settings } = useAppStore()
   const toast = useToast()
   const [modal, setModal] = useState(null)
+  const defaultSource = settings.defaultSourceLanguage || 'English'
 
   const { data: decks = [], isLoading } = useQuery({
     queryKey: ['decks'],
@@ -109,6 +108,7 @@ export default function DeckSelect() {
       {modal && (
         <DeckFormModal
           deck={modal === 'create' ? null : modal}
+          defaultSource={defaultSource}
           onClose={() => setModal(null)}
           onSave={(data) => {
             if (modal === 'create') createMutation.mutate(data)
@@ -175,11 +175,11 @@ function EmptyState({ onCreate }) {
   )
 }
 
-function DeckFormModal({ deck, onClose, onSave, saving }) {
+function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
   const [form, setForm] = useState(
     deck
-      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto' }
-      : { ...EMPTY_FORM }
+      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto' }
+      : { name: '', target_language: 'Korean', source_language: defaultSource || 'English', description: '', card_front_field: 'auto' }
   )
 
   const isEdit = !!deck

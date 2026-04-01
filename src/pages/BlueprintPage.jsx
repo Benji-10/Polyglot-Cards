@@ -37,58 +37,69 @@ export const EXTRA_OPTIONS = [
 ]
 
 // ── usePredictiveProgress ──────────────────────────────────
+// Ticks the bar linearly from batchStart% → ceiling% over estimated ms.
+// No easing — constant rate so the bar moves steadily the whole time.
+// completeBatch() snaps to the ceiling and records actual duration.
+// ──────────────────────────────────────────────────────────
 function usePredictiveProgress() {
-  const rafRef      = useRef(null)
-  const displayRef  = useRef(0)
+  const rafRef         = useRef(null)
+  const displayRef     = useRef(0)
   const [display, setDisplay] = useState(0)
-  const batchTimesRef  = useRef([])
-  const batchStartRef  = useRef(null)
-  const totalRef       = useRef(1)
-  const ceilingRef     = useRef(0)
 
-  const animateTo = useCallback((target, durationMs) => {
+  const batchTimesRef  = useRef([])
+  const batchStartRef  = useRef(null)   // performance.now() when startBatch was called
+  const fromRef        = useRef(0)      // % where this batch started
+  const ceilingRef     = useRef(0)      // % where this batch ends
+  const durationRef    = useRef(INITIAL_ESTIMATE_MS)
+  const totalRef       = useRef(1)
+
+  const tick = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    const safeTarget = Math.min(Math.max(target, 0), 100)
-    const from = displayRef.current
-    if (from >= safeTarget) return
-    const t0 = performance.now()
-    const step = (now) => {
-      const elapsed = now - t0
-      const p = Math.min(elapsed / durationMs, 1)
-      const eased = 1 - Math.pow(1 - p, 3)
-      const value = Math.min(from + (safeTarget - from) * eased, safeTarget)
+
+    const step = () => {
+      const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
+      const t = Math.min(elapsed / durationRef.current, 1)
+      // Linear — no easing. Always moves at constant speed.
+      const value = Math.min(fromRef.current + (ceilingRef.current - fromRef.current) * t, ceilingRef.current)
       displayRef.current = value
       setDisplay(value)
-      if (p < 1) rafRef.current = requestAnimationFrame(step)
+      if (t < 1) rafRef.current = requestAnimationFrame(step)
     }
+
     rafRef.current = requestAnimationFrame(step)
   }, [])
 
   const reset = useCallback((totalBatches) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    totalRef.current      = Math.max(totalBatches, 1)
-    displayRef.current    = 0
-    batchTimesRef.current = []
-    batchStartRef.current = null
-    ceilingRef.current    = 0
+    totalRef.current       = Math.max(totalBatches, 1)
+    displayRef.current     = 0
+    batchTimesRef.current  = []
+    batchStartRef.current  = null
+    fromRef.current        = 0
+    ceilingRef.current     = 0
     setDisplay(0)
   }, [])
 
   const startBatch = useCallback((batchIndex) => {
     batchStartRef.current = performance.now()
-    const ceiling = ((batchIndex + 1) / totalRef.current) * 100
-    ceilingRef.current = ceiling
+    fromRef.current    = (batchIndex / totalRef.current) * 100
+    ceilingRef.current = ((batchIndex + 1) / totalRef.current) * 100
+    // Rolling average of previous batch durations, or initial estimate
     const times = batchTimesRef.current
-    const estimate = times.length > 0 ? times.reduce((a, b) => a + b, 0) / times.length : INITIAL_ESTIMATE_MS
-    animateTo(ceiling, estimate)
-  }, [animateTo])
+    durationRef.current = times.length > 0
+      ? times.reduce((a, b) => a + b, 0) / times.length
+      : INITIAL_ESTIMATE_MS
+    tick()
+  }, [tick])
 
   const completeBatch = useCallback(() => {
     const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
     batchTimesRef.current = [...batchTimesRef.current, elapsed]
-    const ceiling = ceilingRef.current
-    if (displayRef.current < ceiling) animateTo(ceiling, 250)
-  }, [animateTo])
+    // Cancel pending animation and snap to ceiling
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    displayRef.current = ceilingRef.current
+    setDisplay(ceilingRef.current)
+  }, [])
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
   return { percent: display, reset, startBatch, completeBatch }
