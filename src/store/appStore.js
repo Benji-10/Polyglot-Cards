@@ -97,6 +97,160 @@ export const PRESET_THEMES = {
       '--accent-danger':   '#ef4444',
     },
   },
+  // ── New themes ─────────────────────────────────────────────
+  ocean: {
+    label: 'Ocean',
+    swatch: ['#04111f', '#38bdf8', '#22d3ee'],
+    vars: {
+      '--bg-primary':      '#04111f',
+      '--bg-surface':      '#071a2e',
+      '--bg-card':         '#0c2340',
+      '--bg-elevated':     '#102d52',
+      '--border':          '#163c6b',
+      '--border-sub':      '#102d52',
+      '--text-primary':    '#e0f2fe',
+      '--text-secondary':  '#7dd3fc',
+      '--text-muted':      '#38bdf8',
+      '--accent-primary':  '#0ea5e9',
+      '--accent-glow':     'rgba(14,165,233,.15)',
+      '--accent-secondary':'#22d3ee',
+      '--accent-danger':   '#fb7185',
+    },
+  },
+  rose: {
+    label: 'Rose',
+    swatch: ['#150008', '#f43f5e', '#fb923c'],
+    vars: {
+      '--bg-primary':      '#150008',
+      '--bg-surface':      '#1f000e',
+      '--bg-card':         '#2a0015',
+      '--bg-elevated':     '#38001d',
+      '--border':          '#52002b',
+      '--border-sub':      '#38001d',
+      '--text-primary':    '#ffe4e6',
+      '--text-secondary':  '#fda4af',
+      '--text-muted':      '#fb7185',
+      '--accent-primary':  '#f43f5e',
+      '--accent-glow':     'rgba(244,63,94,.15)',
+      '--accent-secondary':'#fb923c',
+      '--accent-danger':   '#ef4444',
+    },
+  },
+  cyber: {
+    label: 'Cyber',
+    swatch: ['#000a12', '#00e5ff', '#ff2d78'],
+    vars: {
+      '--bg-primary':      '#000a12',
+      '--bg-surface':      '#001220',
+      '--bg-card':         '#001a2e',
+      '--bg-elevated':     '#00243d',
+      '--border':          '#003655',
+      '--border-sub':      '#00243d',
+      '--text-primary':    '#e0f8ff',
+      '--text-secondary':  '#67e8f9',
+      '--text-muted':      '#22d3ee',
+      '--accent-primary':  '#00e5ff',
+      '--accent-glow':     'rgba(0,229,255,.15)',
+      '--accent-secondary':'#ff2d78',
+      '--accent-danger':   '#ff2d78',
+    },
+  },
+  neon: {
+    label: 'Neon',
+    swatch: ['#050505', '#a855f7', '#22d3ee'],
+    vars: {
+      '--bg-primary':      '#050505',
+      '--bg-surface':      '#0a0a0a',
+      '--bg-card':         '#111111',
+      '--bg-elevated':     '#1a1a1a',
+      '--border':          '#2a2a2a',
+      '--border-sub':      '#1a1a1a',
+      '--text-primary':    '#f0e6ff',
+      '--text-secondary':  '#c084fc',
+      '--text-muted':      '#7c3aed',
+      '--accent-primary':  '#a855f7',
+      '--accent-glow':     'rgba(168,85,247,.2)',
+      '--accent-secondary':'#22d3ee',
+      '--accent-danger':   '#f43f5e',
+    },
+  },
+  sunset: {
+    label: 'Sunset',
+    swatch: ['#0e0608', '#e879f9', '#f97316'],
+    vars: {
+      '--bg-primary':      '#0e0608',
+      '--bg-surface':      '#18080f',
+      '--bg-card':         '#220b17',
+      '--bg-elevated':     '#2e0e20',
+      '--border':          '#45152f',
+      '--border-sub':      '#2e0e20',
+      '--text-primary':    '#fce7f3',
+      '--text-secondary':  '#f0abfc',
+      '--text-muted':      '#c026d3',
+      '--accent-primary':  '#e879f9',
+      '--accent-glow':     'rgba(232,121,249,.15)',
+      '--accent-secondary':'#f97316',
+      '--accent-danger':   '#ef4444',
+    },
+  },
+  amber: {
+    label: 'Amber',
+    swatch: ['#0f0900', '#f59e0b', '#84cc16'],
+    vars: {
+      '--bg-primary':      '#0f0900',
+      '--bg-surface':      '#1a1000',
+      '--bg-card':         '#251700',
+      '--bg-elevated':     '#312000',
+      '--border':          '#452e00',
+      '--border-sub':      '#312000',
+      '--text-primary':    '#fefce8',
+      '--text-secondary':  '#fde68a',
+      '--text-muted':      '#d97706',
+      '--accent-primary':  '#f59e0b',
+      '--accent-glow':     'rgba(245,158,11,.15)',
+      '--accent-secondary':'#84cc16',
+      '--accent-danger':   '#ef4444',
+    },
+  },
+  // ── Light themes ────────────────────────────────────────────
+  light: {
+    label: 'Light',
+    swatch: ['#f8fafc', '#4f46e5', '#10b981'],
+    vars: {
+      '--bg-primary':      '#f8fafc',
+      '--bg-surface':      '#f1f5f9',
+      '--bg-card':         '#e8eef5',
+      '--bg-elevated':     '#dde6f0',
+      '--border':          '#c8d6e8',
+      '--border-sub':      '#dde6f0',
+      '--text-primary':    '#0f172a',
+      '--text-secondary':  '#334155',
+      '--text-muted':      '#64748b',
+      '--accent-primary':  '#4f46e5',
+      '--accent-glow':     'rgba(79,70,229,.12)',
+      '--accent-secondary':'#10b981',
+      '--accent-danger':   '#ef4444',
+    },
+  },
+  parchment: {
+    label: 'Parchment',
+    swatch: ['#faf6f0', '#b45309', '#059669'],
+    vars: {
+      '--bg-primary':      '#faf6f0',
+      '--bg-surface':      '#f5efe4',
+      '--bg-card':         '#ede5d6',
+      '--bg-elevated':     '#e5d8c4',
+      '--border':          '#c8b89a',
+      '--border-sub':      '#e5d8c4',
+      '--text-primary':    '#1c1008',
+      '--text-secondary':  '#44321c',
+      '--text-muted':      '#78604a',
+      '--accent-primary':  '#b45309',
+      '--accent-glow':     'rgba(180,83,9,.12)',
+      '--accent-secondary':'#059669',
+      '--accent-danger':   '#dc2626',
+    },
+  },
 }
 
 // The user-editable CSS vars for custom theme
@@ -137,6 +291,30 @@ function deriveGlow(accent) {
   } catch { return 'rgba(124,106,240,.15)' }
 }
 
+// Update the SVG favicon dynamically to match the current theme colours
+function updateFavicon(accent, bgSurface) {
+  try {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <rect width="100" height="100" rx="20" fill="${bgSurface}"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="52" font-weight="bold"
+        text-anchor="middle" dominant-baseline="central" fill="${accent}">多</text>
+</svg>`
+    const blob = new Blob([svg], { type: 'image/svg+xml' })
+    const url = URL.createObjectURL(blob)
+    let link = document.getElementById('favicon-dynamic')
+    if (!link) {
+      link = document.createElement('link')
+      link.id = 'favicon-dynamic'
+      link.rel = 'icon'
+      link.type = 'image/svg+xml'
+      document.head.appendChild(link)
+    }
+    const old = link.href
+    link.href = url
+    if (old && old.startsWith('blob:')) URL.revokeObjectURL(old)
+  } catch (e) { /* non-fatal */ }
+}
+
 export function applyTheme(name, customVars) {
   let vars
   if (name === 'custom') {
@@ -151,6 +329,8 @@ export function applyTheme(name, customVars) {
   }
   const root = document.documentElement
   Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
+  // Update favicon to match new theme
+  updateFavicon(vars['--accent-primary'] || '#7c6af0', vars['--bg-surface'] || '#12122a')
 }
 
 // Default quick-add field suggestions shown in Blueprint page

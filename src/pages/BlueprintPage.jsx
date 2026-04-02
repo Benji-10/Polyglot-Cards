@@ -169,37 +169,54 @@ export default function BlueprintPage() {
     if (regenBarRef.current) regenBarRef.current.style.width = `${pct}%`
   }
 
-  // Compute which fields changed between old and new blueprint
-  const computeChangedFields = (oldFields, newFields) => {
-    const changed = []
+  // Compute which fields need AI regeneration:
+  // - New fields (key didn't exist before)
+  // - Changed description/hint/phonetics/type (hint to AI changed = output changes)
+  // - NOT deletions (no AI needed to remove data)
+  // - NOT fields where all cards already have the data populated
+  const computeFieldsNeedingRegen = (oldFields, newFields, cards) => {
+    const needRegen = []
     for (const nf of newFields) {
       const of_ = oldFields.find(f => f.key === nf.key)
       if (!of_) {
-        // New field entirely
-        changed.push(nf)
-      } else {
-        // Changed description, hint, phonetics, or field_type
-        const descChanged = of_.description !== nf.description
-        const typeChanged = of_.field_type !== nf.field_type
-        const phonChanged = JSON.stringify(of_.phonetics) !== JSON.stringify(nf.phonetics)
-        if (descChanged || typeChanged || phonChanged) changed.push(nf)
+        // Brand new field — needs AI for all cards
+        needRegen.push(nf)
+        continue
       }
+      // Check if anything that affects AI output changed
+      const descChanged = of_.description !== nf.description
+      const typeChanged = of_.field_type !== nf.field_type
+      const phonChanged = JSON.stringify(of_.phonetics) !== JSON.stringify(nf.phonetics)
+      if (!descChanged && !typeChanged && !phonChanged) continue
+
+      // Field definition changed — but check if cards already have this data
+      // If ALL cards already have this field populated, no need to regenerate
+      const cardsNeedingField = cards.filter(c => {
+        const val = c.fields?.[nf.key]
+        return !val || val === ''
+      })
+      if (cardsNeedingField.length === 0 && cards.length > 0) {
+        // All cards already have data — skip AI for this field
+        continue
+      }
+      needRegen.push(nf)
     }
-    return changed
+    return needRegen
   }
 
   const runBackgroundRegen = async (savedFields, allCards) => {
     const oldFields = originalBlueprintRef.current || []
-    const changedFields = computeChangedFields(oldFields, savedFields)
+    const changedFields = computeFieldsNeedingRegen(oldFields, savedFields, allCards)
 
     if (changedFields.length === 0 || allCards.length === 0) {
       originalBlueprintRef.current = savedFields
       return
     }
 
-    // Batch size: keep total field-generations under 250
+    // Batch size scales with number of changed fields — no arbitrary cap
+    // Keep total field×word generations under 250 per batch
     const MAX_TOTAL = 250
-    const wordsPerBatch = Math.min(25, Math.max(1, Math.floor(MAX_TOTAL / changedFields.length)))
+    const wordsPerBatch = Math.max(1, Math.floor(MAX_TOTAL / changedFields.length))
     const words = allCards.map(c => c.word)
     const batches = []
     for (let i = 0; i < words.length; i += wordsPerBatch) batches.push(words.slice(i, i + wordsPerBatch))

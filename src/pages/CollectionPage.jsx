@@ -334,6 +334,17 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
   const [word, setWord] = useState(card.word)
   const [fields, setFields] = useState({ ...card.fields })
 
+  // Normalise phonetics to {ruby, extras} shape regardless of stored format
+  const getPhoneticsList = (ph) => {
+    if (!ph) return []
+    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+    // New object shape
+    const keys = []
+    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+    return keys
+  }
+
   return (
     <Modal title="Edit Card" onClose={onClose}>
       <div className="space-y-4">
@@ -341,41 +352,44 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
           <label className="section-title block mb-1.5">Word</label>
           <input className="input" value={word} onChange={e => setWord(e.target.value)} autoFocus />
         </div>
-        {blueprint.map(f => (
-          <div key={f.key}>
-            <label className="section-title block mb-1.5">
-              {f.label}
-              {(f.phonetics || []).length > 0 && (
-                <span className="ml-2 normal-case font-normal text-xs" style={{ color: 'var(--text-muted)' }}>
-                  + {f.phonetics.join(', ')}
-                </span>
+        {blueprint.map(f => {
+          const phoneticKeys = getPhoneticsList(f.phonetics)
+          return (
+            <div key={f.key}>
+              <label className="section-title block mb-1.5">
+                {f.label}
+                {phoneticKeys.length > 0 && (
+                  <span className="ml-2 normal-case font-normal text-xs" style={{ color: 'var(--text-muted)' }}>
+                    + {phoneticKeys.join(', ')}
+                  </span>
+                )}
+              </label>
+              {f.field_type === 'example' ? (
+                <>
+                  <textarea className="input text-sm resize-none" rows={3} value={fields[f.key] || ''}
+                    onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Use {'{{word}}'} to mark cloze</div>
+                </>
+              ) : (
+                <>
+                  <input className="input text-sm" value={fields[f.key] || ''}
+                    onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
+                  {/* Phonetic sub-fields */}
+                  {phoneticKeys.map(pk => {
+                    const subKey = `${f.key}_${pk}`
+                    return (
+                      <div key={subKey} className="mt-1.5">
+                        <label className="section-title block mb-1">{pk}</label>
+                        <input className="input text-xs" value={fields[subKey] || ''}
+                          onChange={e => setFields(v => ({ ...v, [subKey]: e.target.value }))} />
+                      </div>
+                    )
+                  })}
+                </>
               )}
-            </label>
-            {f.field_type === 'example' ? (
-              <>
-                <textarea className="input text-sm resize-none" rows={3} value={fields[f.key] || ''}
-                  onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-                <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Use {'{{word}}'} to mark cloze</div>
-              </>
-            ) : (
-              <>
-                <input className="input text-sm" value={fields[f.key] || ''}
-                  onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-                {/* Phonetic sub-fields */}
-                {(f.phonetics || []).map(pk => {
-                  const subKey = `${f.key}_${pk}`
-                  return (
-                    <div key={subKey} className="mt-1.5">
-                      <label className="section-title block mb-1">{pk}</label>
-                      <input className="input text-xs" value={fields[subKey] || ''}
-                        onChange={e => setFields(v => ({ ...v, [subKey]: e.target.value }))} />
-                    </div>
-                  )
-                })}
-              </>
-            )}
-          </div>
-        ))}
+            </div>
+          )
+        })}
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" disabled={saving}

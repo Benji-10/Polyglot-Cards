@@ -119,7 +119,20 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
     return pool.length
   })()
 
-  const clozeAvailable = !!exampleField
+  // Cloze only makes sense sourceToTarget (fill in the target word from context)
+  // and only when there's an example field
+  const clozeAvailable = !!exampleField && config.direction === 'sourceToTarget'
+
+  // If direction changes and cloze is no longer available, fall back to passive
+  const prevDirection = useRef(config.direction)
+  useEffect(() => {
+    if (prevDirection.current !== config.direction) {
+      prevDirection.current = config.direction
+      if (config.interaction === 'cloze' && !clozeAvailable) {
+        setConfig(c => ({ ...c, interaction: 'passive' }))
+      }
+    }
+  }, [config.direction, clozeAvailable]) // eslint-disable-line
   const sourceLang = deck?.source_language || 'English'
   const targetLang = deck?.target_language || 'Target'
 
@@ -338,6 +351,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     setClozeAnswer('')
   }
 
+  const isPassive = config.interaction === 'passive'
+  const isActive  = !isPassive // typing, multipleChoice, cloze
+
   const advance = (rating) => {
     if (!currentCard) return
     if (mode === 'learn') reviewMutation.mutate({ cardId: currentCard.id, rating })
@@ -354,10 +370,51 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     else setCardIdx(next)
   }
 
-  // Reveal: check answer, set result, flip to revealed phase
+  // Reveal: set result and flip card.
+  // For active modes, auto-record SRS immediately based on correctness.
   const reveal = (result = null) => {
     setLastResult(result)
     setPhase('revealed')
+    if (isActive && result !== null && mode === 'learn') {
+      // Auto-rate based on mode and correctness:
+      // typing:  correct=3 (Good), wrong=1 (Again)
+      // choice:  correct=2 (Hard — easier than recall), wrong=1 (Again)
+      // cloze:   correct=3 (Good), wrong=1 (Again)
+      const autoRating = result.correct
+        ? (config.interaction === 'multipleChoice' ? 2 : 3)
+        : 1
+      reviewMutation.mutate({ cardId: currentCard.id, rating: autoRating })
+      if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+      setSessionStats(s => ({
+        reviewed: s.reviewed + 1,
+        correct: s.correct + (autoRating >= 3 ? 1 : 0),
+        again: s.again + (autoRating === 1 ? 1 : 0),
+        hard: s.hard + (autoRating === 2 ? 1 : 0),
+      }))
+    }
+  }
+
+  // For active modes in revealed phase, space/enter just advances without a rating
+  const advanceActive = () => {
+    if (!currentCard) return
+    // SRS was already recorded in reveal() for learn mode
+    if (!currentCard.seen && mode !== 'learn') {
+      api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+    }
+    // For freestyle, record seen-only (no SRS) if active
+    if (isActive && mode !== 'learn') {
+      const rating = lastResult?.correct ? 3 : 1
+      setSessionStats(s => ({
+        reviewed: s.reviewed + 1,
+        correct: s.correct + (rating >= 3 ? 1 : 0),
+        again: s.again + (rating === 1 ? 1 : 0),
+        hard: 0,
+      }))
+    }
+    resetCard()
+    const next = cardIdx + 1
+    if (next >= total) setDone(true)
+    else setCardIdx(next)
   }
 
   const submitTyping = () => {
@@ -382,14 +439,18 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     reveal({ correct: isCorrect, answer: correct, chosen: choice })
   }
 
-  // Keyboard: Space/Enter flips in passive; 1-4 rates in revealed
+  // Keyboard:
+  // passive prompt  → Space flips
+  // passive revealed → 1-4 rates
+  // active revealed  → Space/Enter advances
   useStudyKeyboard({
     flipped: phase === 'revealed',
     onFlip: () => {
-      if (config.interaction === 'passive' && phase === 'prompt') reveal(null)
+      if (isPassive && phase === 'prompt') reveal(null)
+      if (isActive && phase === 'revealed') advanceActive()
     },
     onRate: (r) => {
-      if (phase === 'revealed') advance(r)
+      if (isPassive && phase === 'revealed') advance(r)
     },
     onExit: onEnd,
     enabled: !done,
@@ -449,10 +510,12 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
         {/* ── Prompt / input area — slides away on reveal ── */}
         <div className="w-full max-w-lg" style={{
-          transition: 'opacity 0.25s ease, transform 0.25s ease',
+          transition: 'opacity 0.25s ease, transform 0.25s ease, max-height 0.25s ease',
           opacity: isRevealed ? 0 : 1,
           transform: isRevealed ? 'translateY(8px)' : 'translateY(0)',
           pointerEvents: isRevealed ? 'none' : 'auto',
+          maxHeight: isRevealed ? '0' : '600px',
+          overflow: 'hidden',
         }}>
           {config.interaction === 'passive' && (
             <button className="btn-primary w-full py-3 text-base" onClick={() => reveal(null)}>
@@ -492,17 +555,19 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           {config.interaction === 'cloze' && (
             clozeData.hasCloze ? (
               <div className="card p-5">
-                {/* Word + definition hint */}
-                <div className="flex items-start justify-between mb-3">
-                  <div className="font-display text-xl font-bold" style={{ color: 'var(--accent-primary)', fontFamily: fontForText(card.word) }}>
-                    {card.word}
-                  </div>
-                  {(() => {
-                    const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
-                    const hint = defField ? card.fields?.[defField.key] : null
-                    return hint ? <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>{hint}</div> : null
-                  })()}
-                </div>
+                {/* Show source language hint — the definition, NOT the target word (that's the answer) */}
+                {(() => {
+                  const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
+                  const hint = defField ? card.fields?.[defField.key] : null
+                  return hint ? (
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="section-title">{deck?.source_language || 'English'}</div>
+                      <div className="text-base font-medium text-right" style={{ color: 'var(--text-primary)', maxWidth: '75%' }}>{hint}</div>
+                    </div>
+                  ) : (
+                    <div className="section-title mb-3">Complete the sentence</div>
+                  )
+                })()}
                 <div className="text-center leading-loose mb-4"
                   style={{ color: 'var(--text-primary)', fontSize: '17px', fontFamily: fontForText(clozeData.before + clozeData.after) }}>
                   {clozeData.before}
@@ -523,7 +588,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               </div>
             ) : (
               <div className="card p-5 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                No example sentence. <button className="btn-ghost text-sm" onClick={() => advance(3)}>Skip →</button>
+                No example sentence. <button className="btn-ghost text-sm" onClick={advanceActive}>Skip →</button>
               </div>
             )
           )}
@@ -557,7 +622,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
             </div>
           )}
 
-          {/* Typing result shown above rating buttons */}
+          {/* Typing result shown above */}
           {(config.interaction === 'typing' || config.interaction === 'cloze') && lastResult && (
             <div className="text-sm text-center font-medium mb-4"
               style={{ color: lastResult.correct ? 'var(--accent-secondary)' : 'var(--accent-danger)' }}>
@@ -567,7 +632,12 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
             </div>
           )}
 
-          {mode === 'learn' ? (
+          {/* Active modes: just advance (SRS already recorded) */}
+          {isActive ? (
+            <button className="btn-secondary w-full py-3 text-sm" onClick={advanceActive}>
+              Continue <span className="opacity-40 ml-1 text-xs">[Space]</span>
+            </button>
+          ) : mode === 'learn' ? (
             <div>
               <div className="section-title text-center mb-3">How well did you know this?</div>
               <div className="grid grid-cols-4 gap-2">
