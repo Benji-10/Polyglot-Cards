@@ -553,17 +553,19 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           {config.interaction === 'cloze' && (
             clozeData.hasCloze ? (
               <div className="card p-5">
-                {/* Word + definition hint */}
-                <div className="flex items-start justify-between mb-3">
-                  <div className="font-display text-xl font-bold" style={{ color: 'var(--accent-primary)', fontFamily: fontForText(card.word) }}>
-                    {card.word}
-                  </div>
-                  {(() => {
-                    const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
-                    const hint = defField ? card.fields?.[defField.key] : null
-                    return hint ? <div className="text-sm text-right" style={{ color: 'var(--text-muted)', maxWidth: '55%' }}>{hint}</div> : null
-                  })()}
-                </div>
+                {/* Show source language hint — the definition, NOT the target word (that's the answer) */}
+                {(() => {
+                  const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
+                  const hint = defField ? card.fields?.[defField.key] : null
+                  return hint ? (
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="section-title">{deck?.source_language || 'English'}</div>
+                      <div className="text-base font-medium text-right" style={{ color: 'var(--text-primary)', maxWidth: '75%' }}>{hint}</div>
+                    </div>
+                  ) : (
+                    <div className="section-title mb-3">Complete the sentence</div>
+                  )
+                })()}
                 <div className="text-center leading-loose mb-4"
                   style={{ color: 'var(--text-primary)', fontSize: '17px', fontFamily: fontForText(clozeData.before + clozeData.after) }}>
                   {clozeData.before}
@@ -584,7 +586,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               </div>
             ) : (
               <div className="card p-5 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                No example sentence. <button className="btn-ghost text-sm" onClick={() => advance(3)}>Skip →</button>
+                No example sentence. <button className="btn-ghost text-sm" onClick={advanceActive}>Skip →</button>
               </div>
             )
           )}
