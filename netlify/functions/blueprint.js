@@ -23,9 +23,11 @@ export const handler = async (event) => {
         ...r,
         phonetics: Array.isArray(r.phonetics)
           ? r.phonetics
-          : typeof r.phonetics === 'string'
-            ? JSON.parse(r.phonetics)
-            : [],
+          : r.phonetics && typeof r.phonetics === 'object'
+            ? r.phonetics  // already a parsed JS object from JSONB
+            : typeof r.phonetics === 'string'
+              ? JSON.parse(r.phonetics)
+              : [],
       }))
       return json(parsed)
     }
@@ -53,7 +55,17 @@ export const handler = async (event) => {
         'SELECT * FROM blueprint_fields WHERE deck_id=$1 ORDER BY position ASC',
         [deckId]
       )
-      return json(rows)
+      const normalised = rows.map(r => ({
+        ...r,
+        phonetics: Array.isArray(r.phonetics)
+          ? r.phonetics
+          : r.phonetics && typeof r.phonetics === 'object'
+            ? r.phonetics
+            : typeof r.phonetics === 'string'
+              ? JSON.parse(r.phonetics)
+              : [],
+      }))
+      return json(normalised)
     }
 
     return error('Method not allowed', 405)
