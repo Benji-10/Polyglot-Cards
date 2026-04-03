@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -287,18 +287,20 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const [done, setDone] = useState(false)
   const [sessionStats, setSessionStats] = useState({ reviewed: 0, correct: 0, again: 0, hard: 0 })
 
-  // Per-card state
-  // 'prompt'   → showing front / input
-  // 'checking' → input submitted, brief moment before flip
-  // 'revealed' → card flipped, showing back + rating buttons
   const [phase, setPhase] = useState('prompt')
-  const [lastResult, setLastResult] = useState(null) // { correct, similarity, answer } — shown in revealed phase
-
-  // Interaction-specific input state
+  const [lastResult, setLastResult] = useState(null)
   const [typingAnswer, setTypingAnswer] = useState('')
-  const [choiceSelected, setChoiceSelected] = useState(null) // the chosen string
+  const [choiceSelected, setChoiceSelected] = useState(null)
   const [clozeAnswer, setClozeAnswer] = useState('')
   const [choices, setChoices] = useState([])
+
+  // Focus refs
+  const typingInputRef  = useRef(null)
+  const clozeInputRef   = useRef(null)
+  const continueButtonRef = useRef(null)
+
+  // Accent characters extracted from deck card data (Latin extended only, max 10)
+  const accentChars = useMemo(() => extractAccentChars(allCards), [allCards])
 
   const reviewMutation = useMutation({
     mutationFn: ({ cardId, rating }) => api.recordReview(cardId, rating),
@@ -349,6 +351,11 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     setTypingAnswer('')
     setChoiceSelected(null)
     setClozeAnswer('')
+    // Refocus the input on next tick after state settles
+    setTimeout(() => {
+      typingInputRef.current?.focus()
+      clozeInputRef.current?.focus()
+    }, 50)
   }
 
   const isPassive = config.interaction === 'passive'
@@ -376,10 +383,6 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     setLastResult(result)
     setPhase('revealed')
     if (isActive && result !== null && mode === 'learn') {
-      // Auto-rate based on mode and correctness:
-      // typing:  correct=3 (Good), wrong=1 (Again)
-      // choice:  correct=2 (Hard — easier than recall), wrong=1 (Again)
-      // cloze:   correct=3 (Good), wrong=1 (Again)
       const autoRating = result.correct
         ? (config.interaction === 'multipleChoice' ? 2 : 3)
         : 1
@@ -392,6 +395,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         hard: s.hard + (autoRating === 2 ? 1 : 0),
       }))
     }
+    // Focus continue button so space/enter works immediately
+    setTimeout(() => continueButtonRef.current?.focus(), 320)
   }
 
   // For active modes in revealed phase, space/enter just advances without a rating
@@ -528,10 +533,16 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               <div className="section-title mb-2">
                 Type the {config.direction === 'targetToSource' ? (deck?.source_language || 'English') : deck?.target_language} answer
               </div>
-              <input className="input text-base" value={typingAnswer}
+              <input ref={typingInputRef} className="input text-base" value={typingAnswer}
                 onChange={e => setTypingAnswer(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && submitTyping()}
-                placeholder="Your answer..." autoFocus />
+                placeholder="Your answer..." autoFocus data-accent-input="1" />
+              {accentChars.length > 0 && (
+                <AccentBar chars={accentChars} onInsert={ch => {
+                  setTypingAnswer(prev => prev + ch)
+                  typingInputRef.current?.focus()
+                }} />
+              )}
               <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
             </div>
           )}
@@ -572,15 +583,23 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ color: 'var(--text-primary)', fontSize: '17px', fontFamily: fontForText(clozeData.before + clozeData.after) }}>
                   {clozeData.before}
                   <input
+                    ref={clozeInputRef}
                     className="cloze-input"
                     style={{ width: `${Math.max((clozeData.answer?.length || 4) + 2, 4) * 0.95}em`, fontFamily: fontForText(clozeData.answer || '') }}
                     value={clozeAnswer}
                     onChange={e => setClozeAnswer(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && submitCloze()}
                     autoFocus
+                    data-accent-input="1"
                   />
                   {clozeData.after}
                 </div>
+                {accentChars.length > 0 && (
+                  <AccentBar chars={accentChars} onInsert={ch => {
+                    setClozeAnswer(prev => prev + ch)
+                    clozeInputRef.current?.focus()
+                  }} />
+                )}
                 <div className="flex gap-3">
                   <button className="btn-secondary flex-1" onClick={() => reveal({ correct: false, answer: clozeData.answer })}>Skip</button>
                   <button className="btn-primary flex-1" onClick={submitCloze}>Check</button>
@@ -634,7 +653,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
           {/* Active modes: just advance (SRS already recorded) */}
           {isActive ? (
-            <button className="btn-secondary w-full py-3 text-sm" onClick={advanceActive}>
+            <button ref={continueButtonRef} className="btn-secondary w-full py-3 text-sm" onClick={advanceActive}>
               Continue <span className="opacity-40 ml-1 text-xs">[Space]</span>
             </button>
           ) : mode === 'learn' ? (
@@ -819,6 +838,116 @@ function SessionComplete({ stats, total, mode, onEnd }) {
       )}
 
       <button className="btn-primary w-full py-3 text-base" onClick={onEnd}>← Back to Setup</button>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
+// ACCENT KEYBOARD HELPERS
+// ─────────────────────────────────────────────
+
+// Languages where we DON'T show an accent bar — either too many accents,
+// completely different script, or no relevant accented Latin chars.
+const SKIP_ACCENT_LANGS = new Set([
+  'korean', 'japanese', 'chinese', 'arabic', 'russian', 'thai',
+  'vietnamese', 'hindi', 'hebrew', 'latvian', 'lithuanian', 'greek',
+])
+
+// Unicode ranges that are Latin extended (accented Latin letters)
+// Excludes CJK, Arabic, Hebrew, Cyrillic, Thai, Devanagari, etc.
+function isLatinExtended(ch) {
+  const cp = ch.codePointAt(0)
+  // Latin-1 Supplement accented (À–ÿ, excluding ×÷)
+  if (cp >= 0xC0 && cp <= 0xFF && cp !== 0xD7 && cp !== 0xF7) return true
+  // Latin Extended-A (Ā–ž)
+  if (cp >= 0x0100 && cp <= 0x017F) return true
+  // Latin Extended-B (partial — common accented chars)
+  if (cp >= 0x0180 && cp <= 0x024F) return true
+  return false
+}
+
+/**
+ * Scan all card words + fields for accented Latin chars.
+ * Returns up to 10, sorted by frequency descending.
+ * Returns [] for CJK/Arabic/etc. decks.
+ */
+function extractAccentChars(cards) {
+  if (!cards?.length) return []
+
+  // Collect all text content
+  const freq = {}
+  for (const card of cards) {
+    const texts = [card.word, ...Object.values(card.fields || {})]
+    for (const text of texts) {
+      if (!text || typeof text !== 'string') continue
+      for (const ch of text) {
+        if (isLatinExtended(ch)) {
+          const lower = ch.toLowerCase()
+          freq[lower] = (freq[lower] || 0) + 1
+        }
+      }
+    }
+  }
+
+  return Object.entries(freq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([ch]) => ch)
+}
+
+const ACCENT_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+
+/**
+ * A row of up to 10 accent character buttons.
+ * Clicking or pressing the corresponding number key inserts the character.
+ */
+function AccentBar({ chars, onInsert }) {
+  useEffect(() => {
+    if (!chars.length) return
+    const handler = (e) => {
+      // Don't fire when typing normally in inputs (only fire for digit keys)
+      if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
+      const idx = ACCENT_KEYS.indexOf(e.key)
+      if (idx === -1 || idx >= chars.length) return
+      // Only intercept if target is our study input (has data-accent-input)
+      if (!e.target.dataset.accentInput) return
+      e.preventDefault()
+      onInsert(chars[idx])
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [chars, onInsert])
+
+  if (!chars.length) return null
+
+  return (
+    <div className="flex gap-1 flex-wrap mt-2">
+      {chars.map((ch, i) => (
+        <button
+          key={ch}
+          type="button"
+          tabIndex={-1}  // don't steal focus from input
+          onClick={() => onInsert(ch)}
+          className="flex flex-col items-center justify-center rounded-lg border transition-all"
+          style={{
+            width: '36px', height: '36px',
+            borderColor: 'var(--border)',
+            background: 'var(--bg-surface)',
+            color: 'var(--text-primary)',
+            fontSize: '14px',
+            position: 'relative',
+          }}
+          title={`Insert "${ch}" (press ${ACCENT_KEYS[i]})`}
+        >
+          {ch}
+          <span style={{
+            position: 'absolute', bottom: '1px', right: '3px',
+            fontSize: '8px', color: 'var(--text-muted)', lineHeight: 1,
+          }}>
+            {ACCENT_KEYS[i]}
+          </span>
+        </button>
+      ))}
     </div>
   )
 }
