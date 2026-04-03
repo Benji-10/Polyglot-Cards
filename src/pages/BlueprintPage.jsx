@@ -371,14 +371,36 @@ export default function BlueprintPage() {
             setProgressMsg(`Batch ${i + 1} / ${batches.length}`)
             progress.startBatch(i)
 
-            const genRes = await api.generateCards(
-              deckId,
-              { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
-              fieldsRef.current || []
-            )
-            progress.completeBatch(i)
+            // Retry each batch up to 3 times before giving up
+            let genRes = null
+            let lastErr = null
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                genRes = await api.generateCards(
+                  deckId,
+                  { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
+                  fieldsRef.current || []
+                )
+                lastErr = null
+                break
+              } catch (e) {
+                lastErr = e
+                if (attempt < 2) {
+                  setProgressMsg(`Batch ${i + 1} / ${batches.length} — retrying (${attempt + 1}/3)…`)
+                  await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+                }
+              }
+            }
 
-            if (!genRes?.cards?.length) { toast.error(`Batch ${i + 1} returned no cards`); continue }
+            if (lastErr || !genRes?.cards?.length) {
+              const msg = lastErr?.message || 'No cards returned'
+              toast.error(`Batch ${i + 1} failed: ${msg}`)
+              setProgressMsg(`Batch ${i + 1} / ${batches.length} — failed, continuing…`)
+              progress.completeBatch(i)
+              continue
+            }
+
+            progress.completeBatch(i)
 
             const toSave = genRes.cards.filter(c => !c._error).map(c => ({ deck_id: deckId, word: c.word, fields: c }))
             if (toSave.length) {
