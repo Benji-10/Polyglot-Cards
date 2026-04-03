@@ -55,17 +55,33 @@ export function fuzzyMatch(input, expected, threshold = 0.85) {
 /**
  * Strip the cloze marker from a string and return
  * { display: string with blank, answer: string }
+ * Handles multiple sentences separated by " ;;; " — picks one randomly.
  */
 export function parseCloze(text, marker = '{{', endMarker = '}}') {
   if (!text) return { display: '', answer: '', hasCloze: false }
-  const start = text.indexOf(marker)
-  const end = text.indexOf(endMarker, start)
-  if (start === -1 || end === -1) return { display: text, answer: '', hasCloze: false }
 
-  const answer = text.slice(start + marker.length, end)
-  const display = text.slice(0, start) + '___' + text.slice(end + endMarker.length)
-  const before = text.slice(0, start)
-  const after = text.slice(end + endMarker.length)
+  // If multiple sentences, pick one randomly
+  const sentence = pickRandomExample(text)
+
+  const start = sentence.indexOf(marker)
+  const end = sentence.indexOf(endMarker, start)
+  if (start === -1 || end === -1) return { display: sentence, answer: '', hasCloze: false }
+
+  const answer = sentence.slice(start + marker.length, end)
+  const display = sentence.slice(0, start) + '___' + sentence.slice(end + endMarker.length)
+  const before = sentence.slice(0, start)
+  const after = sentence.slice(end + endMarker.length)
 
   return { display, answer, before, after, hasCloze: true }
+}
+
+/**
+ * Split a multi-sentence example string (delimited by " ;;; ") and pick one at random.
+ * Returns the raw text unchanged if there's only one sentence.
+ */
+export function pickRandomExample(text) {
+  if (!text) return ''
+  const parts = text.split(' ;;; ').map(s => s.trim()).filter(Boolean)
+  if (parts.length <= 1) return text.trim()
+  return parts[Math.floor(Math.random() * parts.length)]
 }

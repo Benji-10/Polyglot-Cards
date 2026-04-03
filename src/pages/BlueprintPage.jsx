@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useToast } from '../components/shared/Toast'
 import { useAppStore } from '../store/appStore'
+import Modal from '../components/shared/Modal'
 import Papa from 'papaparse'
 
 const BATCH_SIZE = 25
@@ -127,6 +128,8 @@ export default function BlueprintPage() {
   const [importError, setImportError] = useState(null)
   const [progressMsg, setProgressMsg] = useState('')
   const [totalImported, setTotalImported] = useState(0)
+  // Homograph review: cards pending user approval before saving
+  const [homographPending, setHomographPending] = useState(null) // { groups: [{word, senses: [{card, selected}]}], onConfirm }
 
   const progress = usePredictiveProgress()
 
@@ -366,30 +369,99 @@ export default function BlueprintPage() {
           progress.reset(batches.length)
           setProgressMsg(`0 / ${batches.length} batches`)
 
-          let imported = 0
+          let allGeneratedCards = []
           for (let i = 0; i < batches.length; i++) {
             setProgressMsg(`Batch ${i + 1} / ${batches.length}`)
             progress.startBatch(i)
 
-            const genRes = await api.generateCards(
-              deckId,
-              { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
-              fieldsRef.current || []
-            )
-            progress.completeBatch(i)
-
-            if (!genRes?.cards?.length) { toast.error(`Batch ${i + 1} returned no cards`); continue }
-
-            const toSave = genRes.cards.filter(c => !c._error).map(c => ({ deck_id: deckId, word: c.word, fields: c }))
-            if (toSave.length) {
-              await batchSaveMutation.mutateAsync(toSave)
-              imported += toSave.length
-              setTotalImported(imported)
+            // Retry each batch up to 3 times before giving up
+            let genRes = null
+            let lastErr = null
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                genRes = await api.generateCards(
+                  deckId,
+                  { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
+                  fieldsRef.current || []
+                )
+                lastErr = null
+                break
+              } catch (e) {
+                lastErr = e
+                if (attempt < 2) {
+                  setProgressMsg(`Batch ${i + 1} / ${batches.length} — retrying (${attempt + 1}/3)…`)
+                  await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+                }
+              }
             }
-            setProgressMsg(`Batch ${i + 1} / ${batches.length} — ${imported} cards saved`)
+
+            if (lastErr || !genRes?.cards?.length) {
+              const msg = lastErr?.message || 'No cards returned'
+              toast.error(`Batch ${i + 1} failed: ${msg}`)
+              setProgressMsg(`Batch ${i + 1} / ${batches.length} — failed, continuing…`)
+              progress.completeBatch(i)
+              continue
+            }
+
+            progress.completeBatch(i)
+            allGeneratedCards.push(...genRes.cards.filter(c => !c._error))
+            setProgressMsg(`Batch ${i + 1} / ${batches.length} — ${allGeneratedCards.length} cards generated`)
           }
 
-          setImportState('done')
+          if (!allGeneratedCards.length) {
+            setImportState('done')
+            return
+          }
+
+          // ── Detect homographs ──────────────────────────────
+          // Group cards by word. Any word with multiple cards (multiple meanings) is a homograph.
+          const wordGroups = {}
+          for (const card of allGeneratedCards) {
+            if (!wordGroups[card.word]) wordGroups[card.word] = []
+            wordGroups[card.word].push(card)
+          }
+
+          const homographGroups = Object.entries(wordGroups)
+            .filter(([, cards]) => cards.length > 1)
+            .map(([word, cards]) => ({
+              word,
+              senses: cards.map(c => ({ card: c, selected: true, sense: c._sense || '' })),
+            }))
+
+          // Function that actually saves the chosen cards
+          const saveCards = async (cardsToSave) => {
+            const toSave = cardsToSave.map(c => {
+              // Strip internal _ fields before saving
+              const { _meanings, _sense, _error, ...fields } = c
+              return { deck_id: deckId, word: c.word, fields }
+            })
+            if (toSave.length) {
+              await batchSaveMutation.mutateAsync(toSave)
+              setTotalImported(toSave.length)
+            }
+            setImportState('done')
+            qc.invalidateQueries({ queryKey: ['cards', deckId] })
+          }
+
+          if (homographGroups.length === 0) {
+            // No homographs — save immediately
+            await saveCards(allGeneratedCards)
+          } else {
+            // Pause import and show homograph review modal
+            setImportState('review')
+            setHomographPending({
+              groups: homographGroups,
+              allCards: allGeneratedCards,
+              onConfirm: async (approvedHomographCards) => {
+                setHomographPending(null)
+                setImportState('generating')
+                // Replace homograph words with only the approved senses
+                const homographWords = new Set(homographGroups.map(g => g.word))
+                const nonHomographCards = allGeneratedCards.filter(c => !homographWords.has(c.word))
+                await saveCards([...nonHomographCards, ...approvedHomographCards])
+              },
+            })
+          }
         } catch (e) { setImportError(e.message); setImportState('error') }
       },
       error: e => { setImportError(e.message); setImportState('error') },
@@ -531,6 +603,12 @@ export default function BlueprintPage() {
               Import more
             </button>
           </div>
+        ) : importState === 'review' ? (
+          <div className="card p-6 text-center">
+            <div className="text-4xl mb-3">🔍</div>
+            <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Reviewing homographs…</div>
+            <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Check the popup to confirm which meanings to import.</div>
+          </div>
         ) : (
           <div className="card p-6">
             <div className="flex items-center gap-3 mb-3">
@@ -561,6 +639,16 @@ export default function BlueprintPage() {
         <ManualCardForm deckId={deckId} fields={fields}
           onSaved={() => { qc.invalidateQueries({ queryKey: ['cards', deckId] }); toast.success('Card added!') }} />
       </section>
+
+      {/* ── Homograph review modal ──────────────────────── */}
+      {homographPending && (
+        <HomographModal
+          groups={homographPending.groups}
+          blueprint={fields}
+          onConfirm={(approved) => homographPending.onConfirm(approved)}
+          onClose={() => { setHomographPending(null); setImportState('done') }}
+        />
+      )}
     </div>
   )
 }
@@ -753,5 +841,81 @@ function ManualCardForm({ deckId, fields, onSaved }) {
         {saving ? 'Saving...' : saved ? '✓ Added!' : 'Add Card'}
       </button>
     </div>
+  )
+}
+
+// ── HomographModal ──────────────────────────────────────────
+// Shows homograph groups and lets the user pick which meanings to keep.
+function HomographModal({ groups, blueprint, onConfirm, onClose }) {
+  // Each group has { word, senses: [{card, sense, selected}] }
+  const [localGroups, setLocalGroups] = useState(() =>
+    groups.map(g => ({
+      ...g,
+      senses: g.senses.map(s => ({ ...s, selected: true })),
+    }))
+  )
+
+  const toggle = (gIdx, sIdx) => {
+    setLocalGroups(prev => prev.map((g, gi) => gi !== gIdx ? g : {
+      ...g,
+      senses: g.senses.map((s, si) => si !== sIdx ? s : { ...s, selected: !s.selected }),
+    }))
+  }
+
+  const handleConfirm = () => {
+    const approved = localGroups.flatMap(g => g.senses.filter(s => s.selected).map(s => s.card))
+    onConfirm(approved)
+  }
+
+  const totalSelected = localGroups.reduce((n, g) => n + g.senses.filter(s => s.selected).length, 0)
+
+  // Find the definition/reading field to preview meaning
+  const defField = blueprint?.find(f => f.key === 'definition') || blueprint?.find(f => f.key === 'reading')
+
+  return (
+    <Modal title="Homograph Review" onClose={onClose} size="lg">
+      <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+        The following words have multiple distinct meanings. Select which meanings you want to import as separate cards.
+      </p>
+      <div className="space-y-5 max-h-96 overflow-auto pr-1">
+        {localGroups.map((g, gIdx) => (
+          <div key={g.word} className="rounded-xl p-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+            <div className="font-display text-lg font-bold mb-3" style={{ color: 'var(--accent-primary)' }}>
+              {g.word}
+              <span className="ml-2 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
+                {g.senses.length} meanings
+              </span>
+            </div>
+            <div className="space-y-2">
+              {g.senses.map((s, sIdx) => {
+                const preview = defField ? s.card[defField.key] : ''
+                return (
+                  <label key={sIdx} className="flex items-start gap-3 cursor-pointer p-2 rounded-lg transition-colors hover:bg-white/5">
+                    <input type="checkbox" checked={s.selected} onChange={() => toggle(gIdx, sIdx)} className="mt-0.5 flex-shrink-0" />
+                    <div className="min-w-0">
+                      {s.sense && (
+                        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{s.sense}</div>
+                      )}
+                      {preview && (
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{preview}</div>
+                      )}
+                      {!s.sense && !preview && (
+                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Meaning {sIdx + 1}</div>
+                      )}
+                    </div>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-3 mt-5">
+        <button className="btn-secondary flex-1" onClick={onClose}>Skip all homographs</button>
+        <button className="btn-primary flex-1" onClick={handleConfirm} disabled={totalSelected === 0}>
+          Import {totalSelected} card{totalSelected !== 1 ? 's' : ''} →
+        </button>
+      </div>
+    </Modal>
   )
 }

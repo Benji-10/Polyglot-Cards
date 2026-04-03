@@ -29,10 +29,14 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
     english:               `"${fieldKey}_english": concise English gloss or translation`,
   })
 
+  const hasExampleField = blueprint.some(f => f.field_type === 'example')
+
   const fieldLines = blueprint.map(f => {
     const lines = [`  - "${f.key}": ${f.description || f.label}`]
     if (f.field_type === 'example') {
-      lines.push(`    IMPORTANT: Wrap ONLY the exact target vocabulary word with {{word}}. One occurrence only.`)
+      lines.push(`    Generate 3 varied example sentences, separated by " ;;; " (space-semicolonsemicolonsemicolon-space).`)
+      lines.push(`    Each sentence must wrap ONLY the exact target word with {{word}}. Use natural, contextually different sentences.`)
+      lines.push(`    Example format: "나는 {{사랑}}해. ;;; 그것은 {{사랑}}이야. ;;; {{사랑}}은 아름다워."`)
     }
     const keys = getPhoneticKeys(f.phonetics)
     const descs = PHONETIC_DESCRIPTIONS(f.key)
@@ -40,7 +44,7 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
     return lines.join('\n')
   }).join('\n')
 
-  const exampleKeys = ['word']
+  const exampleKeys = ['word', '_meanings', '_sense']
   blueprint.forEach(f => {
     exampleKeys.push(f.key)
     getPhoneticKeys(f.phonetics).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
@@ -51,15 +55,23 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
 Target language: ${targetLanguage}
 Vocabulary items to process: ${JSON.stringify(vocabBatch)}
 
-For each vocabulary item, generate a JSON object with these fields:
+HOMOGRAPH RULE — CRITICAL:
+Some words have multiple unrelated meanings (homographs). For example, Korean "눈" means both "eye" and "snow".
+- If a word has 2 or more distinct unrelated meanings, output ONE separate JSON object per meaning.
+- Each object must have "_meanings": <total number of distinct meanings for this word> and "_sense": "<very brief disambiguating label in the source language, e.g. 'eye' or 'snow'>".
+- If a word has only one meaning, set "_meanings": 1 and "_sense": "".
+- Do NOT combine multiple meanings into one card (e.g. do NOT write "eye/snow" in the definition field).
+
+For each vocabulary item (or each meaning if a homograph), generate a JSON object with these fields:
   - "word": the vocabulary item exactly as given
+  - "_meanings": integer — total number of distinct unrelated meanings this word has
+  - "_sense": string — brief source-language label for THIS meaning only (empty string if _meanings is 1)
 ${fieldLines}
 
 Rules:
 - Return ONLY a valid JSON array, no markdown, no explanation, no code fences.
 - Process every word in the input list.
 - Keep entries concise and accurate.
-- For example sentence fields, {{word}} must wrap ONLY the target word itself.
 - If you cannot generate a field, use an empty string "".
 
 Expected output keys per item: ${exampleKeys.join(', ')}
@@ -87,23 +99,37 @@ export const handler = async (event) => {
 
     const prompt = buildPrompt(targetLanguage, blueprint, vocabArray)
 
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 4096,
-          responseMimeType: 'application/json',
-        },
-      }),
-    })
+    // Call Gemini with exponential backoff — retries on 503/429 (rate limit / overload)
+    const MAX_RETRIES = 4
+    const RETRY_DELAYS = [1000, 2000, 4000, 8000]
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text()
-      console.error('Gemini error:', errText)
-      return error(`Gemini API error: ${geminiRes.status}`, 502)
+    let geminiRes
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 4096,
+            responseMimeType: 'application/json',
+          },
+        }),
+      })
+
+      if (geminiRes.ok) break
+
+      const retryable = geminiRes.status === 503 || geminiRes.status === 429
+      if (!retryable || attempt === MAX_RETRIES) {
+        const errText = await geminiRes.text()
+        console.error(`Gemini error (attempt ${attempt + 1}):`, errText)
+        return error(`Gemini API error: ${geminiRes.status}`, 502)
+      }
+
+      const delay = RETRY_DELAYS[attempt] ?? 8000
+      console.log(`Gemini ${geminiRes.status} — retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`)
+      await new Promise(r => setTimeout(r, delay))
     }
 
     const geminiData = await geminiRes.json()
