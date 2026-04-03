@@ -156,4 +156,3 @@ export const handler = async (event) => {
     return error(e.message, 500)
   }
 }
-

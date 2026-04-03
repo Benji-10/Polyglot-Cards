@@ -11,30 +11,30 @@ const BATCH_SIZE = 25
 const INITIAL_ESTIMATE_MS = 11800
 
 const FIELD_TYPE_OPTIONS = [
-  { value: 'text',    label: 'Text' },
+  { value: 'text', label: 'Text' },
   { value: 'example', label: 'Example (cloze)' },
 ]
 
 // Ruby options — mutually exclusive, shown in a dropdown
 export const RUBY_OPTIONS = [
-  { key: 'none',                   label: 'None' },
-  { key: 'furigana',               label: 'Furigana (hiragana above kanji)',         hint: 'Japanese' },
-  { key: 'romaji',                 label: 'Rōmaji (Latin romanisation)',              hint: 'Japanese' },
-  { key: 'pinyin',                 label: 'Pīnyīn (tonal romanisation)',              hint: 'Mandarin' },
-  { key: 'bopomofo',               label: 'Bopomofo / Zhùyīn (ㄅㄆㄇ)',              hint: 'Mandarin' },
-  { key: 'jyutping',               label: 'Jyutping',                                hint: 'Cantonese' },
-  { key: 'hangulRomanisation',     label: 'Romanisation (Revised Romanisation)',      hint: 'Korean' },
-  { key: 'romanisation',           label: 'Transliteration (Latin script)',           hint: 'Arabic / Farsi / Russian / etc.' },
-  { key: 'cyrillicTranslit',       label: 'Cyrillic Transliteration',                hint: 'Russian / Ukrainian' },
-  { key: 'cantoneseRomanisation',  label: 'Yale / Cantonese Romanisation',           hint: 'Cantonese alt.' },
-  { key: 'tones',                  label: 'Tone marks / numbered tones',             hint: 'Mandarin / Thai / Vietnamese' },
+  { key: 'none', label: 'None' },
+  { key: 'furigana', label: 'Furigana (hiragana above kanji)', hint: 'Japanese' },
+  { key: 'romaji', label: 'Rōmaji (Latin romanisation)', hint: 'Japanese' },
+  { key: 'pinyin', label: 'Pīnyīn (tonal romanisation)', hint: 'Mandarin' },
+  { key: 'bopomofo', label: 'Bopomofo / Zhùyīn (ㄅㄆㄇ)', hint: 'Mandarin' },
+  { key: 'jyutping', label: 'Jyutping', hint: 'Cantonese' },
+  { key: 'hangulRomanisation', label: 'Romanisation (Revised Romanisation)', hint: 'Korean' },
+  { key: 'romanisation', label: 'Transliteration (Latin script)', hint: 'Arabic / Farsi / Russian / etc.' },
+  { key: 'cyrillicTranslit', label: 'Cyrillic Transliteration', hint: 'Russian / Ukrainian' },
+  { key: 'cantoneseRomanisation', label: 'Yale / Cantonese Romanisation', hint: 'Cantonese alt.' },
+  { key: 'tones', label: 'Tone marks / numbered tones', hint: 'Mandarin / Thai / Vietnamese' },
 ]
 
 // Extra annotations — can be combined, shown as checkboxes
 export const EXTRA_OPTIONS = [
-  { key: 'diacritics',      label: 'Vowel marks / diacritics',   hint: 'Tashkeel for Arabic, Harakat for Farsi, nikud for Hebrew, etc.' },
-  { key: 'ipa',             label: 'IPA',                         hint: 'International Phonetic Alphabet — shown as /…/' },
-  { key: 'english',         label: 'English gloss',               hint: 'Translation shown below the word' },
+  { key: 'diacritics', label: 'Vowel marks / diacritics', hint: 'Tashkeel for Arabic, Harakat for Farsi, nikud for Hebrew, etc.' },
+  { key: 'ipa', label: 'IPA', hint: 'International Phonetic Alphabet — shown as /…/' },
+  { key: 'english', label: 'English gloss', hint: 'Translation shown below the word' },
 ]
 
 // ── usePredictiveProgress ──────────────────────────────────
@@ -43,18 +43,18 @@ export const EXTRA_OPTIONS = [
 // The text % uses React state (updates every ~100ms to avoid jank).
 // ──────────────────────────────────────────────────────────
 function usePredictiveProgress() {
-  const rafRef         = useRef(null)
-  const barRef         = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
-  const valueRef       = useRef(0)      // current % value (ground truth)
+  const rafRef = useRef(null)
+  const barRef = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
+  const valueRef = useRef(0)      // current % value (ground truth)
   const [displayPct, setDisplayPct] = useState(0) // for the text label only
 
-  const batchTimesRef  = useRef([])
-  const batchStartRef  = useRef(null)
-  const fromRef        = useRef(0)
-  const ceilingRef     = useRef(0)
-  const durationRef    = useRef(INITIAL_ESTIMATE_MS)
-  const totalRef       = useRef(1)
-  const lastTextRef    = useRef(0)      // last time we updated text state
+  const batchTimesRef = useRef([])
+  const batchStartRef = useRef(null)
+  const fromRef = useRef(0)
+  const ceilingRef = useRef(0)
+  const durationRef = useRef(INITIAL_ESTIMATE_MS)
+  const totalRef = useRef(1)
+  const lastTextRef = useRef(0)      // last time we updated text state
 
   const updateBar = useCallback((pct) => {
     valueRef.current = pct
@@ -83,19 +83,19 @@ function usePredictiveProgress() {
 
   const reset = useCallback((totalBatches) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    totalRef.current       = Math.max(totalBatches, 1)
-    valueRef.current       = 0
-    batchTimesRef.current  = []
-    batchStartRef.current  = null
-    fromRef.current        = 0
-    ceilingRef.current     = 0
+    totalRef.current = Math.max(totalBatches, 1)
+    valueRef.current = 0
+    batchTimesRef.current = []
+    batchStartRef.current = null
+    fromRef.current = 0
+    ceilingRef.current = 0
     if (barRef.current) barRef.current.style.width = '0%'
     setDisplayPct(0)
   }, [])
 
   const startBatch = useCallback((batchIndex) => {
     batchStartRef.current = performance.now()
-    fromRef.current    = (batchIndex / totalRef.current) * 100
+    fromRef.current = (batchIndex / totalRef.current) * 100
     ceilingRef.current = ((batchIndex + 1) / totalRef.current) * 100
     const times = batchTimesRef.current
     durationRef.current = times.length > 0
@@ -263,7 +263,7 @@ export default function BlueprintPage() {
             const ph = f.phonetics
             if (ph && !Array.isArray(ph)) {
               if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
-              ;(ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
+                ; (ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
             }
             return keys
           })
@@ -342,7 +342,7 @@ export default function BlueprintPage() {
       const next = [...prev]
       const swap = idx + dir
       if (swap < 0 || swap >= next.length) return prev
-      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+        ;[next[idx], next[swap]] = [next[swap], next[idx]]
       return next
     })
   }
@@ -475,7 +475,7 @@ export default function BlueprintPage() {
       <div className="max-w-3xl mx-auto px-6 py-10">
         <div className="section-title mb-1">Blueprint & Import</div>
         <div className="font-display text-3xl font-bold mb-8" style={{ color: 'var(--text-primary)' }}>{deck?.name || '...'}</div>
-        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-14 rounded-xl shimmer" />)}</div>
+        <div className="space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-14 rounded-xl shimmer" />)}</div>
       </div>
     )
   }
@@ -683,8 +683,8 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
       <div className="p-4 flex items-start gap-3">
         {/* Reorder */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 mt-1">
-          <button disabled={isFirst}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
-          <button disabled={isLast}   className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+          <button disabled={isFirst} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+          <button disabled={isLast} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
         </div>
 
         {/* Config */}
@@ -693,7 +693,7 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
             <input className="input text-sm py-1.5 w-36" value={field.label}
               onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
             <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
-              onChange={e => onUpdate({ key: e.target.value.replace(/\s/g,'_').toLowerCase() })} placeholder="key" />
+              onChange={e => onUpdate({ key: e.target.value.replace(/\s/g, '_').toLowerCase() })} placeholder="key" />
             <select className="input text-xs py-1.5 w-36" value={field.field_type}
               onChange={e => onUpdate({ field_type: e.target.value })}>
               {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}

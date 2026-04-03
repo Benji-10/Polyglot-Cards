@@ -113,9 +113,9 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
 
   const availableCount = (() => {
     if (mode === 'learn') return dueCards.length + (stats.new || 0)
-    const pool = config.cardPool === 'seen'   ? allCards.filter(c => c.seen)
-               : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
-               : allCards
+    const pool = config.cardPool === 'seen' ? allCards.filter(c => c.seen)
+      : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
+        : allCards
     return pool.length
   })()
 
@@ -191,10 +191,10 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
           <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Study mode</div>
           <div className="space-y-1.5">
             {[
-              { v: 'passive',        label: '👁 Passive',         sub: 'Flip card, rate 1–4 yourself',         available: true },
-              { v: 'typing',         label: '⌨ Typing',           sub: 'Type the answer — auto-rated',          available: true },
-              { v: 'multipleChoice', label: '🔲 Multiple choice',  sub: 'Pick from 4 options — auto-rated',      available: allCards.length >= 4 },
-              { v: 'cloze',          label: '✦ Cloze',            sub: 'Fill in the blank from example',        available: clozeAvailable },
+              { v: 'passive', label: '👁 Passive', sub: 'Flip card, rate 1–4 yourself', available: true },
+              { v: 'typing', label: '⌨ Typing', sub: 'Type the answer — auto-rated', available: true },
+              { v: 'multipleChoice', label: '🔲 Multiple choice', sub: 'Pick from 4 options — auto-rated', available: allCards.length >= 4 },
+              { v: 'cloze', label: '✦ Cloze', sub: 'Fill in the blank from example', available: clozeAvailable },
             ].map(({ v, label, sub, available }) => (
               <button key={v} disabled={!available}
                 className="w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left disabled:opacity-40"
@@ -218,7 +218,7 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
         {mode === 'freestyle' && (
           <ConfigRow label="Card pool">
             <div className="flex gap-2">
-              {[['all','All'],['seen','Seen'],['unseen','Unseen']].map(([v, l]) => (
+              {[['all', 'All'], ['seen', 'Seen'], ['unseen', 'Unseen']].map(([v, l]) => (
                 <SegmentButton key={v} label={l} active={config.cardPool === v}
                   onClick={() => setConfig(c => ({ ...c, cardPool: v }))} />
               ))}
@@ -295,8 +295,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const [choices, setChoices] = useState([])
 
   // Focus refs
-  const typingInputRef  = useRef(null)
-  const clozeInputRef   = useRef(null)
+  const typingInputRef = useRef(null)
+  const clozeInputRef = useRef(null)
   const continueButtonRef = useRef(null)
 
   // Accent characters extracted from word + source-language fields only (Latin extended, max 10)
@@ -319,9 +319,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
       const newPool = allCards.filter(c => c.srs_state === 'new' || (c.repetitions === 0 && !c.seen))
       cards = [...dueLimited, ...(needed > 0 ? newPool.slice(0, needed) : [])]
     } else {
-      let pool = config.cardPool === 'seen'   ? allCards.filter(c => c.seen)
-               : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
-               : allCards
+      let pool = config.cardPool === 'seen' ? allCards.filter(c => c.seen)
+        : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
+          : allCards
       if (config.randomise) pool = shuffle([...pool])
       cards = pool.slice(0, config.batchSize)
     }
@@ -359,12 +359,12 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   }
 
   const isPassive = config.interaction === 'passive'
-  const isActive  = !isPassive // typing, multipleChoice, cloze
+  const isActive = !isPassive // typing, multipleChoice, cloze
 
   const advance = (rating) => {
     if (!currentCard) return
     if (mode === 'learn') reviewMutation.mutate({ cardId: currentCard.id, rating })
-    if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+    if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => { })
     setSessionStats(s => ({
       reviewed: s.reviewed + 1,
       correct: s.correct + (rating >= 3 ? 1 : 0),
@@ -387,7 +387,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         ? (config.interaction === 'multipleChoice' ? 2 : 3)
         : 1
       reviewMutation.mutate({ cardId: currentCard.id, rating: autoRating })
-      if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+      if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => { })
       setSessionStats(s => ({
         reviewed: s.reviewed + 1,
         correct: s.correct + (autoRating >= 3 ? 1 : 0),
@@ -404,7 +404,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     if (!currentCard) return
     // SRS was already recorded in reveal() for learn mode
     if (!currentCard.seen && mode !== 'learn') {
-      api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+      api.updateCard(currentCard.id, { seen: true }).catch(() => { })
     }
     // For freestyle, record seen-only (no SRS) if active
     if (isActive && mode !== 'learn') {
@@ -564,7 +564,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'transparent' }}
                   onClick={() => submitChoice(choice)}>
                   <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {['A','B','C','D'][i]}
+                    {['A', 'B', 'C', 'D'][i]}
                   </span>
                   {choice}
                 </button>
@@ -650,7 +650,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 return (
                   <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm"
                     style={{ borderColor, background: bg, color: 'var(--text-primary)' }}>
-                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A','B','C','D'][i]}</span>
+                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A', 'B', 'C', 'D'][i]}</span>
                     {choice}
                   </div>
                 )
@@ -679,9 +679,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               <div className="grid grid-cols-4 gap-2">
                 {[
                   { rating: 1, label: 'Again', cls: 'again', key: '1' },
-                  { rating: 2, label: 'Hard',  cls: 'hard',  key: '2' },
-                  { rating: 3, label: 'Good',  cls: 'good',  key: '3' },
-                  { rating: 4, label: 'Easy',  cls: 'easy',  key: '4' },
+                  { rating: 2, label: 'Hard', cls: 'hard', key: '2' },
+                  { rating: 3, label: 'Good', cls: 'good', key: '3' },
+                  { rating: 4, label: 'Easy', cls: 'easy', key: '4' },
                 ].map(({ rating, label, cls, key }) => (
                   <button key={rating} className={`rating-btn ${cls}`} onClick={() => advance(rating)}>
                     <span className="text-xs font-medium">{label}</span>
@@ -839,9 +839,9 @@ function SessionComplete({ stats, total, mode, onEnd }) {
           <div className="grid grid-cols-4 gap-3 mb-4">
             {[
               { label: 'Reviewed', value: stats.reviewed },
-              { label: 'Correct',  value: stats.correct,  color: 'var(--accent-secondary)' },
-              { label: 'Hard',     value: stats.hard,     color: '#fdcb6e' },
-              { label: 'Again',    value: stats.again,    color: 'var(--accent-danger)' },
+              { label: 'Correct', value: stats.correct, color: 'var(--accent-secondary)' },
+              { label: 'Hard', value: stats.hard, color: '#fdcb6e' },
+              { label: 'Again', value: stats.again, color: 'var(--accent-danger)' },
             ].map(s => (
               <div key={s.label} className="text-center">
                 <div className="font-display text-2xl font-bold" style={{ color: s.color || 'var(--text-primary)' }}>{s.value}</div>
@@ -927,7 +927,7 @@ function extractAccentChars(cards, blueprint) {
     .map(([ch]) => ch)
 }
 
-const ACCENT_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+const ACCENT_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
 
 /**
  * A row of up to 10 accent character buttons.
@@ -938,7 +938,7 @@ function AccentBar({ chars, onInsert }) {
     if (!chars.length) return
     const handler = (e) => {
       // Don't fire when typing normally in inputs (only fire for digit keys)
-      if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
+      if (!['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
       const idx = ACCENT_KEYS.indexOf(e.key)
       if (idx === -1 || idx >= chars.length) return
       // Only intercept if target is our study input (has data-accent-input)
