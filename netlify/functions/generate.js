@@ -87,23 +87,37 @@ export const handler = async (event) => {
 
     const prompt = buildPrompt(targetLanguage, blueprint, vocabArray)
 
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 4096,
-          responseMimeType: 'application/json',
-        },
-      }),
-    })
+    // Call Gemini with exponential backoff — retries on 503/429 (rate limit / overload)
+    const MAX_RETRIES = 4
+    const RETRY_DELAYS = [1000, 2000, 4000, 8000]
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text()
-      console.error('Gemini error:', errText)
-      return error(`Gemini API error: ${geminiRes.status}`, 502)
+    let geminiRes
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 4096,
+            responseMimeType: 'application/json',
+          },
+        }),
+      })
+
+      if (geminiRes.ok) break
+
+      const retryable = geminiRes.status === 503 || geminiRes.status === 429
+      if (!retryable || attempt === MAX_RETRIES) {
+        const errText = await geminiRes.text()
+        console.error(`Gemini error (attempt ${attempt + 1}):`, errText)
+        return error(`Gemini API error: ${geminiRes.status}`, 502)
+      }
+
+      const delay = RETRY_DELAYS[attempt] ?? 8000
+      console.log(`Gemini ${geminiRes.status} — retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`)
+      await new Promise(r => setTimeout(r, delay))
     }
 
     const geminiData = await geminiRes.json()
@@ -130,4 +144,3 @@ export const handler = async (event) => {
     return error(e.message, 500)
   }
 }
-
