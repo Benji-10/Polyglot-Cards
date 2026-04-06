@@ -33,6 +33,16 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
 
   const fieldLines = blueprint.map(f => {
     const lines = [`  - "${f.key}": ${f.description || f.label}`]
+    if (f.key === 'source_translation') {
+      lines.push(`    CRITICAL: This must be a SINGLE short word or very short phrase in the source language.`)
+      lines.push(`    Do NOT use slash-separated alternatives (e.g. "love" not "love/affection").`)
+      lines.push(`    Do NOT include articles, grammatical markers, or explanations here.`)
+    }
+    if (f.key === 'context') {
+      lines.push(`    Provide a brief grammatical or usage hint that disambiguates the word — e.g. "(masculine singular)", "(verb)", "(pl.)", "(formal)".`)
+      lines.push(`    Leave as empty string "" if the word needs no disambiguation.`)
+      lines.push(`    Do NOT repeat the translation here. This is purely a disambiguation hint.`)
+    }
     if (f.field_type === 'example') {
       lines.push(`    Generate 3 varied example sentences, separated by " ;;; " (space-semicolonsemicolonsemicolon-space).`)
       lines.push(`    Each sentence must wrap ONLY the exact target word with {{word}}. Use natural, contextually different sentences.`)
@@ -72,6 +82,8 @@ Rules:
 - Return ONLY a valid JSON array, no markdown, no explanation, no code fences.
 - Process every word in the input list.
 - Keep entries concise and accurate.
+- "source_translation" must be ONE clean word or very short phrase — no slashes, no alternatives, no parenthetical notes.
+- "context" is only for grammatical disambiguation (gender, number, register) — leave "" if not needed.
 - If you cannot generate a field, use an empty string "".
 
 Expected output keys per item: ${exampleKeys.join(', ')}
@@ -156,3 +168,4 @@ export const handler = async (event) => {
     return error(e.message, 500)
   }
 }
+

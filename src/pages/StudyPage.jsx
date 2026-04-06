@@ -91,6 +91,7 @@ export default function StudyPage() {
       config={sessionConfig}
       allCards={allCards}
       dueCards={dueCards}
+      strictAccents={settings.strictAccents ?? true}
       onEnd={() => setSessionConfig(null)}
     />
   )
@@ -113,9 +114,9 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
 
   const availableCount = (() => {
     if (mode === 'learn') return dueCards.length + (stats.new || 0)
-    const pool = config.cardPool === 'seen' ? allCards.filter(c => c.seen)
-      : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
-        : allCards
+    const pool = config.cardPool === 'seen'   ? allCards.filter(c => c.seen)
+               : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
+               : allCards
     return pool.length
   })()
 
@@ -191,10 +192,10 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
           <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Study mode</div>
           <div className="space-y-1.5">
             {[
-              { v: 'passive', label: '👁 Passive', sub: 'Flip card, rate 1–4 yourself', available: true },
-              { v: 'typing', label: '⌨ Typing', sub: 'Type the answer — auto-rated', available: true },
-              { v: 'multipleChoice', label: '🔲 Multiple choice', sub: 'Pick from 4 options — auto-rated', available: allCards.length >= 4 },
-              { v: 'cloze', label: '✦ Cloze', sub: 'Fill in the blank from example', available: clozeAvailable },
+              { v: 'passive',        label: '👁 Passive',         sub: 'Flip card, rate 1–4 yourself',         available: true },
+              { v: 'typing',         label: '⌨ Typing',           sub: 'Type the answer — auto-rated',          available: true },
+              { v: 'multipleChoice', label: '🔲 Multiple choice',  sub: 'Pick from 4 options — auto-rated',      available: allCards.length >= 4 },
+              { v: 'cloze',          label: '✦ Cloze',            sub: 'Fill in the blank from example',        available: clozeAvailable },
             ].map(({ v, label, sub, available }) => (
               <button key={v} disabled={!available}
                 className="w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left disabled:opacity-40"
@@ -218,7 +219,7 @@ function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, sav
         {mode === 'freestyle' && (
           <ConfigRow label="Card pool">
             <div className="flex gap-2">
-              {[['all', 'All'], ['seen', 'Seen'], ['unseen', 'Unseen']].map(([v, l]) => (
+              {[['all','All'],['seen','Seen'],['unseen','Unseen']].map(([v, l]) => (
                 <SegmentButton key={v} label={l} active={config.cardPool === v}
                   onClick={() => setConfig(c => ({ ...c, cardPool: v }))} />
               ))}
@@ -277,7 +278,7 @@ function Toggle({ value, onChange }) {
 // ─────────────────────────────────────────────
 // STUDY SESSION
 // ─────────────────────────────────────────────
-function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, onEnd }) {
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, strictAccents = true, onEnd }) {
   const qc = useQueryClient()
   const exampleField = blueprint.find(f => f.field_type === 'example')
 
@@ -294,9 +295,16 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const [clozeAnswer, setClozeAnswer] = useState('')
   const [choices, setChoices] = useState([])
 
+  // Card flip bug fix:
+  // `displayedCardIdx` is what the DOM actually renders. It only advances
+  // AFTER the 500ms flip-back animation completes, so the new card's back
+  // never bleeds through while the old card is still rotating.
+  const [displayedCardIdx, setDisplayedCardIdx] = useState(0)
+  const flipTimerRef = useRef(null)
+
   // Focus refs
-  const typingInputRef = useRef(null)
-  const clozeInputRef = useRef(null)
+  const typingInputRef    = useRef(null)
+  const clozeInputRef     = useRef(null)
   const continueButtonRef = useRef(null)
 
   // Accent characters extracted from word + source-language fields only (Latin extended, max 10)
@@ -319,9 +327,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
       const newPool = allCards.filter(c => c.srs_state === 'new' || (c.repetitions === 0 && !c.seen))
       cards = [...dueLimited, ...(needed > 0 ? newPool.slice(0, needed) : [])]
     } else {
-      let pool = config.cardPool === 'seen' ? allCards.filter(c => c.seen)
-        : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
-          : allCards
+      let pool = config.cardPool === 'seen'   ? allCards.filter(c => c.seen)
+               : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
+               : allCards
       if (config.randomise) pool = shuffle([...pool])
       cards = pool.slice(0, config.batchSize)
     }
@@ -329,8 +337,10 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     setQueueReady(true)
   }, []) // eslint-disable-line
 
-  const currentCard = queueReady ? queue.current[cardIdx] : null
-  const total = queue.current.length
+  const currentCard    = queueReady ? queue.current[cardIdx] : null
+  // The card the DOM renders — lags behind cardIdx during flip-back animation
+  const displayedCard  = queueReady ? queue.current[displayedCardIdx] : null
+  const total          = queue.current.length
   const sessionProgress = total > 0 ? (cardIdx / total) * 100 : 0
 
   // Generate multiple choice options when card changes
@@ -358,55 +368,48 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     }, 50)
   }
 
+  // Advance to next card with flip-back animation guard.
+  // 1. Flip card back to face-down (phase stays 'revealed' briefly)
+  // 2. After the 500ms CSS transition, update displayedCardIdx to new card
+  // 3. Then reset to 'prompt' so new front is shown
+  const advanceCard = (next) => {
+    if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
+    // Update logical index immediately so progress counter advances
+    if (next >= total) {
+      setDone(true)
+      return
+    }
+    setCardIdx(next)
+    // Start flip-back animation — card rotates back while still showing old content
+    setPhase('flipping-back')
+    // After flip completes, swap displayed card and reset to prompt
+    flipTimerRef.current = setTimeout(() => {
+      setDisplayedCardIdx(next)
+      resetCard()
+    }, 500) // must match .card-inner CSS transition duration
+  }
+
   const isPassive = config.interaction === 'passive'
-  const isActive = !isPassive // typing, multipleChoice, cloze
+  const isActive  = !isPassive
 
   const advance = (rating) => {
     if (!currentCard) return
     if (mode === 'learn') reviewMutation.mutate({ cardId: currentCard.id, rating })
-    if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => { })
+    if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
     setSessionStats(s => ({
       reviewed: s.reviewed + 1,
       correct: s.correct + (rating >= 3 ? 1 : 0),
       again: s.again + (rating === 1 ? 1 : 0),
       hard: s.hard + (rating === 2 ? 1 : 0),
     }))
-    resetCard()
-    const next = cardIdx + 1
-    if (next >= total) setDone(true)
-    else setCardIdx(next)
+    advanceCard(cardIdx + 1)
   }
 
-  // Reveal: set result and flip card.
-  // For active modes, auto-record SRS immediately based on correctness.
-  const reveal = (result = null) => {
-    setLastResult(result)
-    setPhase('revealed')
-    if (isActive && result !== null && mode === 'learn') {
-      const autoRating = result.correct
-        ? (config.interaction === 'multipleChoice' ? 2 : 3)
-        : 1
-      reviewMutation.mutate({ cardId: currentCard.id, rating: autoRating })
-      if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => { })
-      setSessionStats(s => ({
-        reviewed: s.reviewed + 1,
-        correct: s.correct + (autoRating >= 3 ? 1 : 0),
-        again: s.again + (autoRating === 1 ? 1 : 0),
-        hard: s.hard + (autoRating === 2 ? 1 : 0),
-      }))
-    }
-    // Focus continue button so space/enter works immediately
-    setTimeout(() => continueButtonRef.current?.focus(), 320)
-  }
-
-  // For active modes in revealed phase, space/enter just advances without a rating
   const advanceActive = () => {
     if (!currentCard) return
-    // SRS was already recorded in reveal() for learn mode
     if (!currentCard.seen && mode !== 'learn') {
-      api.updateCard(currentCard.id, { seen: true }).catch(() => { })
+      api.updateCard(currentCard.id, { seen: true }).catch(() => {})
     }
-    // For freestyle, record seen-only (no SRS) if active
     if (isActive && mode !== 'learn') {
       const rating = lastResult?.correct ? 3 : 1
       setSessionStats(s => ({
@@ -416,23 +419,42 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         hard: 0,
       }))
     }
-    resetCard()
-    const next = cardIdx + 1
-    if (next >= total) setDone(true)
-    else setCardIdx(next)
+    advanceCard(cardIdx + 1)
+  }
+
+  // Cleanup flip timer on unmount
+  useEffect(() => () => { if (flipTimerRef.current) clearTimeout(flipTimerRef.current) }, [])
+
+  const reveal = (result = null) => {
+    setLastResult(result)
+    setPhase('revealed')
+    if (isActive && result !== null && mode === 'learn') {
+      const autoRating = result.correct
+        ? (config.interaction === 'multipleChoice' ? 2 : 3)
+        : 1
+      reviewMutation.mutate({ cardId: currentCard.id, rating: autoRating })
+      if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
+      setSessionStats(s => ({
+        reviewed: s.reviewed + 1,
+        correct: s.correct + (autoRating >= 3 ? 1 : 0),
+        again: s.again + (autoRating === 1 ? 1 : 0),
+        hard: s.hard + (autoRating === 2 ? 1 : 0),
+      }))
+    }
+    setTimeout(() => continueButtonRef.current?.focus(), 320)
   }
 
   const submitTyping = () => {
     if (!currentCard || phase !== 'prompt') return
     const expected = getAnswer(currentCard, config.direction, blueprint, deck)
-    const result = fuzzyMatch(typingAnswer, expected || '')
+    const result = fuzzyMatch(typingAnswer, expected || '', { strictAccents })
     reveal({ ...result, answer: expected })
   }
 
   const submitCloze = () => {
     if (!currentCard || phase !== 'prompt') return
     const clozeData = parseCloze(currentCard.fields?.[exampleField?.key] || '')
-    const result = fuzzyMatch(clozeAnswer, clozeData.answer || '')
+    const result = fuzzyMatch(clozeAnswer, clozeData.answer || '', { strictAccents })
     reveal({ ...result, answer: clozeData.answer })
   }
 
@@ -467,14 +489,17 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   if (done || total === 0) {
     return <SessionComplete stats={sessionStats} total={total} mode={mode} onEnd={onEnd} />
   }
+  if (!card || !front) return null
 
-  const card = currentCard
-  const front = getFront(card, config.direction, blueprint, deck)
-  const clozeData = (config.interaction === 'cloze' && exampleField)
+  const card       = displayedCard   // what we actually render
+  const front      = card ? getFront(card, config.direction, blueprint, deck) : null
+  const clozeData  = (config.interaction === 'cloze' && exampleField && card)
     ? parseCloze(card.fields?.[exampleField.key] || '')
     : { hasCloze: false }
 
-  const isRevealed = phase === 'revealed'
+  // flipped = card is showing back; during flip-back animation show as not flipped
+  const isRevealed   = phase === 'revealed'
+  const isFlipped    = phase === 'revealed'   // card-inner gets .flipped only when fully revealed
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col" style={{ minHeight: 'calc(100vh - 60px)' }}>
@@ -505,7 +530,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           card={card}
           front={front}
           blueprint={blueprint}
-          flipped={isRevealed}
+          flipped={isFlipped}
           deck={deck}
           onFlip={config.interaction === 'passive' ? () => reveal(null) : null}
           resultBadge={lastResult && isRevealed
@@ -530,8 +555,16 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
           {config.interaction === 'typing' && (
             <div className="card p-5">
-              <div className="section-title mb-2">
-                Type the {config.direction === 'targetToSource' ? (deck?.source_language || 'English') : deck?.target_language} answer
+              <div className="flex items-center justify-between mb-2">
+                <div className="section-title">
+                  Type the {config.direction === 'targetToSource' ? (deck?.source_language || 'English') : deck?.target_language} answer
+                </div>
+                {!front.isTarget && front.context && (
+                  <span className="text-xs px-2 py-0.5 rounded-full"
+                    style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,.2)' }}>
+                    {front.context}
+                  </span>
+                )}
               </div>
               <input ref={typingInputRef} className="input text-base" value={typingAnswer}
                 onChange={e => setTypingAnswer(e.target.value)}
@@ -564,7 +597,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'transparent' }}
                   onClick={() => submitChoice(choice)}>
                   <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {['A', 'B', 'C', 'D'][i]}
+                    {['A','B','C','D'][i]}
                   </span>
                   {choice}
                 </button>
@@ -577,12 +610,18 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               <div className="card p-5">
                 {/* Show source language hint — the definition, NOT the target word (that's the answer) */}
                 {(() => {
-                  const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading')
-                  const hint = defField ? card.fields?.[defField.key] : null
+                  const hintField = blueprint.find(f => f.key === 'source_translation')
+                    || blueprint.find(f => f.key === 'definition')
+                    || blueprint.find(f => f.key === 'reading')
+                  const hint = hintField ? card.fields?.[hintField.key] : null
+                  const ctx  = card.fields?.context || null
                   return hint ? (
                     <div className="flex items-center justify-between mb-3">
                       <div className="section-title">{deck?.source_language || 'English'}</div>
-                      <div className="text-base font-medium text-right" style={{ color: 'var(--text-primary)', maxWidth: '75%' }}>{hint}</div>
+                      <div className="text-right">
+                        <div className="text-base font-medium" style={{ color: 'var(--text-primary)' }}>{hint}</div>
+                        {ctx && <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{ctx}</div>}
+                      </div>
                     </div>
                   ) : (
                     <div className="section-title mb-3">Complete the sentence</div>
@@ -650,7 +689,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 return (
                   <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm"
                     style={{ borderColor, background: bg, color: 'var(--text-primary)' }}>
-                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A', 'B', 'C', 'D'][i]}</span>
+                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A','B','C','D'][i]}</span>
                     {choice}
                   </div>
                 )
@@ -679,9 +718,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
               <div className="grid grid-cols-4 gap-2">
                 {[
                   { rating: 1, label: 'Again', cls: 'again', key: '1' },
-                  { rating: 2, label: 'Hard', cls: 'hard', key: '2' },
-                  { rating: 3, label: 'Good', cls: 'good', key: '3' },
-                  { rating: 4, label: 'Easy', cls: 'easy', key: '4' },
+                  { rating: 2, label: 'Hard',  cls: 'hard',  key: '2' },
+                  { rating: 3, label: 'Good',  cls: 'good',  key: '3' },
+                  { rating: 4, label: 'Easy',  cls: 'easy',  key: '4' },
                 ].map(({ rating, label, cls, key }) => (
                   <button key={rating} className={`rating-btn ${cls}`} onClick={() => advance(rating)}>
                     <span className="text-xs font-medium">{label}</span>
@@ -709,17 +748,32 @@ function getFront(card, direction, blueprint, deck) {
   if (direction === 'targetToSource') {
     return { word: card.word, label: deck?.target_language || 'Word', isTarget: true }
   }
-  // sourceToTarget: find definition/reading field to show as prompt
-  const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading') || blueprint[0]
-  const val = defField ? card.fields?.[defField.key] : null
-  return { word: val || card.word, label: deck?.source_language || 'Source', isTarget: false, fieldKey: defField?.key, field: defField }
+  // sourceToTarget: show the source_translation as the prompt
+  const srcField = blueprint.find(f => f.key === 'source_translation')
+    || blueprint.find(f => f.key === 'definition')
+    || blueprint.find(f => f.key === 'reading')
+    || blueprint[0]
+  const val = srcField ? card.fields?.[srcField.key] : null
+  const context = card.fields?.context || null
+  return {
+    word: val || card.word,
+    label: deck?.source_language || 'Source',
+    isTarget: false,
+    context,
+    fieldKey: srcField?.key,
+    field: srcField,
+  }
 }
 
 // ── Helper: what counts as the correct answer ──────────────
+// In sourceToTarget, match against source_translation (single clean word), not definition
 function getAnswer(card, direction, blueprint, deck) {
   if (direction === 'targetToSource') {
-    const defField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading') || blueprint[0]
-    return defField ? card.fields?.[defField.key] : card.word
+    const srcField = blueprint.find(f => f.key === 'source_translation')
+      || blueprint.find(f => f.key === 'definition')
+      || blueprint.find(f => f.key === 'reading')
+      || blueprint[0]
+    return srcField ? card.fields?.[srcField.key] : card.word
   }
   // sourceToTarget: the target word itself
   return card.word
@@ -727,11 +781,11 @@ function getAnswer(card, direction, blueprint, deck) {
 
 // ── PassiveCard — 3D flip card ─────────────────────────────
 function PassiveCard({ card, front, blueprint, flipped, deck, onFlip, resultBadge }) {
-  const frontField = blueprint.find(f => f.show_on_front)
+  const frontField = blueprint.find(f => f.show_on_front && f.key !== 'context')
 
   return (
     <div className="w-full max-w-lg card-3d"
-      style={{ cursor: !flipped && onFlip ? 'pointer' : 'default', height: '260px', position: 'relative' }}
+      style={{ cursor: !flipped && onFlip ? 'pointer' : 'default', height: '280px', position: 'relative' }}
       onClick={!flipped && onFlip ? onFlip : undefined}>
       <div className={`card-inner w-full h-full ${flipped ? 'flipped' : ''}`} style={{ position: 'relative' }}>
         {/* FRONT */}
@@ -741,6 +795,18 @@ function PassiveCard({ card, front, blueprint, flipped, deck, onFlip, resultBadg
             style={{ color: 'var(--text-primary)', fontFamily: fontForText(front.word) }}>
             {front.word}
           </div>
+
+          {/* Context hint — shown in sourceToTarget below the prompt word */}
+          {!front.isTarget && front.context && (
+            <div className="mt-3 px-3 py-1.5 rounded-lg text-center"
+              style={{ background: 'var(--accent-glow)', border: '1px solid rgba(124,106,240,.2)' }}>
+              <div className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>
+                {front.context}
+              </div>
+            </div>
+          )}
+
+          {/* show_on_front field — shown in targetToSource */}
           {front.isTarget && frontField && card.fields?.[frontField.key] && (
             <div className="mt-3 text-base" style={{ color: 'var(--text-secondary)', fontFamily: fontForText(card.fields[frontField.key]) }}>
               {card.fields[frontField.key]}
@@ -771,7 +837,7 @@ function PassiveCard({ card, front, blueprint, flipped, deck, onFlip, resultBadg
               if (!value) return null
               return (
                 <div key={field.key} className="flex gap-2 min-w-0">
-                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '72px' }}>{field.label}</span>
+                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '80px' }}>{field.label}</span>
                   <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
                       ? <ExampleDisplay text={value} />
@@ -839,9 +905,9 @@ function SessionComplete({ stats, total, mode, onEnd }) {
           <div className="grid grid-cols-4 gap-3 mb-4">
             {[
               { label: 'Reviewed', value: stats.reviewed },
-              { label: 'Correct', value: stats.correct, color: 'var(--accent-secondary)' },
-              { label: 'Hard', value: stats.hard, color: '#fdcb6e' },
-              { label: 'Again', value: stats.again, color: 'var(--accent-danger)' },
+              { label: 'Correct',  value: stats.correct,  color: 'var(--accent-secondary)' },
+              { label: 'Hard',     value: stats.hard,     color: '#fdcb6e' },
+              { label: 'Again',    value: stats.again,    color: 'var(--accent-danger)' },
             ].map(s => (
               <div key={s.label} className="text-center">
                 <div className="font-display text-2xl font-bold" style={{ color: s.color || 'var(--text-primary)' }}>{s.value}</div>
@@ -927,7 +993,7 @@ function extractAccentChars(cards, blueprint) {
     .map(([ch]) => ch)
 }
 
-const ACCENT_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+const ACCENT_KEYS = ['1','2','3','4','5','6','7','8','9','0']
 
 /**
  * A row of up to 10 accent character buttons.
@@ -938,7 +1004,7 @@ function AccentBar({ chars, onInsert }) {
     if (!chars.length) return
     const handler = (e) => {
       // Don't fire when typing normally in inputs (only fire for digit keys)
-      if (!['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
+      if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
       const idx = ACCENT_KEYS.indexOf(e.key)
       if (idx === -1 || idx >= chars.length) return
       // Only intercept if target is our study input (has data-accent-input)

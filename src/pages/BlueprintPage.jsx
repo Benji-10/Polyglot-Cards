@@ -11,30 +11,30 @@ const BATCH_SIZE = 25
 const INITIAL_ESTIMATE_MS = 11800
 
 const FIELD_TYPE_OPTIONS = [
-  { value: 'text', label: 'Text' },
+  { value: 'text',    label: 'Text' },
   { value: 'example', label: 'Example (cloze)' },
 ]
 
 // Ruby options — mutually exclusive, shown in a dropdown
 export const RUBY_OPTIONS = [
-  { key: 'none', label: 'None' },
-  { key: 'furigana', label: 'Furigana (hiragana above kanji)', hint: 'Japanese' },
-  { key: 'romaji', label: 'Rōmaji (Latin romanisation)', hint: 'Japanese' },
-  { key: 'pinyin', label: 'Pīnyīn (tonal romanisation)', hint: 'Mandarin' },
-  { key: 'bopomofo', label: 'Bopomofo / Zhùyīn (ㄅㄆㄇ)', hint: 'Mandarin' },
-  { key: 'jyutping', label: 'Jyutping', hint: 'Cantonese' },
-  { key: 'hangulRomanisation', label: 'Romanisation (Revised Romanisation)', hint: 'Korean' },
-  { key: 'romanisation', label: 'Transliteration (Latin script)', hint: 'Arabic / Farsi / Russian / etc.' },
-  { key: 'cyrillicTranslit', label: 'Cyrillic Transliteration', hint: 'Russian / Ukrainian' },
-  { key: 'cantoneseRomanisation', label: 'Yale / Cantonese Romanisation', hint: 'Cantonese alt.' },
-  { key: 'tones', label: 'Tone marks / numbered tones', hint: 'Mandarin / Thai / Vietnamese' },
+  { key: 'none',                   label: 'None' },
+  { key: 'furigana',               label: 'Furigana (hiragana above kanji)',         hint: 'Japanese' },
+  { key: 'romaji',                 label: 'Rōmaji (Latin romanisation)',              hint: 'Japanese' },
+  { key: 'pinyin',                 label: 'Pīnyīn (tonal romanisation)',              hint: 'Mandarin' },
+  { key: 'bopomofo',               label: 'Bopomofo / Zhùyīn (ㄅㄆㄇ)',              hint: 'Mandarin' },
+  { key: 'jyutping',               label: 'Jyutping',                                hint: 'Cantonese' },
+  { key: 'hangulRomanisation',     label: 'Romanisation (Revised Romanisation)',      hint: 'Korean' },
+  { key: 'romanisation',           label: 'Transliteration (Latin script)',           hint: 'Arabic / Farsi / Russian / etc.' },
+  { key: 'cyrillicTranslit',       label: 'Cyrillic Transliteration',                hint: 'Russian / Ukrainian' },
+  { key: 'cantoneseRomanisation',  label: 'Yale / Cantonese Romanisation',           hint: 'Cantonese alt.' },
+  { key: 'tones',                  label: 'Tone marks / numbered tones',             hint: 'Mandarin / Thai / Vietnamese' },
 ]
 
 // Extra annotations — can be combined, shown as checkboxes
 export const EXTRA_OPTIONS = [
-  { key: 'diacritics', label: 'Vowel marks / diacritics', hint: 'Tashkeel for Arabic, Harakat for Farsi, nikud for Hebrew, etc.' },
-  { key: 'ipa', label: 'IPA', hint: 'International Phonetic Alphabet — shown as /…/' },
-  { key: 'english', label: 'English gloss', hint: 'Translation shown below the word' },
+  { key: 'diacritics',      label: 'Vowel marks / diacritics',   hint: 'Tashkeel for Arabic, Harakat for Farsi, nikud for Hebrew, etc.' },
+  { key: 'ipa',             label: 'IPA',                         hint: 'International Phonetic Alphabet — shown as /…/' },
+  { key: 'english',         label: 'English gloss',               hint: 'Translation shown below the word' },
 ]
 
 // ── usePredictiveProgress ──────────────────────────────────
@@ -43,18 +43,18 @@ export const EXTRA_OPTIONS = [
 // The text % uses React state (updates every ~100ms to avoid jank).
 // ──────────────────────────────────────────────────────────
 function usePredictiveProgress() {
-  const rafRef = useRef(null)
-  const barRef = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
-  const valueRef = useRef(0)      // current % value (ground truth)
+  const rafRef         = useRef(null)
+  const barRef         = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
+  const valueRef       = useRef(0)      // current % value (ground truth)
   const [displayPct, setDisplayPct] = useState(0) // for the text label only
 
-  const batchTimesRef = useRef([])
-  const batchStartRef = useRef(null)
-  const fromRef = useRef(0)
-  const ceilingRef = useRef(0)
-  const durationRef = useRef(INITIAL_ESTIMATE_MS)
-  const totalRef = useRef(1)
-  const lastTextRef = useRef(0)      // last time we updated text state
+  const batchTimesRef  = useRef([])
+  const batchStartRef  = useRef(null)
+  const fromRef        = useRef(0)
+  const ceilingRef     = useRef(0)
+  const durationRef    = useRef(INITIAL_ESTIMATE_MS)
+  const totalRef       = useRef(1)
+  const lastTextRef    = useRef(0)      // last time we updated text state
 
   const updateBar = useCallback((pct) => {
     valueRef.current = pct
@@ -83,19 +83,19 @@ function usePredictiveProgress() {
 
   const reset = useCallback((totalBatches) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    totalRef.current = Math.max(totalBatches, 1)
-    valueRef.current = 0
-    batchTimesRef.current = []
-    batchStartRef.current = null
-    fromRef.current = 0
-    ceilingRef.current = 0
+    totalRef.current       = Math.max(totalBatches, 1)
+    valueRef.current       = 0
+    batchTimesRef.current  = []
+    batchStartRef.current  = null
+    fromRef.current        = 0
+    ceilingRef.current     = 0
     if (barRef.current) barRef.current.style.width = '0%'
     setDisplayPct(0)
   }, [])
 
   const startBatch = useCallback((batchIndex) => {
     batchStartRef.current = performance.now()
-    fromRef.current = (batchIndex / totalRef.current) * 100
+    fromRef.current    = (batchIndex / totalRef.current) * 100
     ceilingRef.current = ((batchIndex + 1) / totalRef.current) * 100
     const times = batchTimesRef.current
     durationRef.current = times.length > 0
@@ -154,9 +154,9 @@ export default function BlueprintPage() {
         ...f,
         phonetics: normalisePhonetics(f.phonetics),
       }))
-      setFields(normalised)
-      // Store original as deep copy for diffing
-      originalBlueprintRef.current = normalised
+      const withMandatory = ensureMandatoryFields(normalised)
+      setFields(withMandatory)
+      originalBlueprintRef.current = withMandatory
     }
   }, [blueprintData]) // eslint-disable-line
 
@@ -263,7 +263,7 @@ export default function BlueprintPage() {
             const ph = f.phonetics
             if (ph && !Array.isArray(ph)) {
               if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
-                ; (ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
+              ;(ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
             }
             return keys
           })
@@ -342,7 +342,7 @@ export default function BlueprintPage() {
       const next = [...prev]
       const swap = idx + dir
       if (swap < 0 || swap >= next.length) return prev
-        ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
       return next
     })
   }
@@ -475,7 +475,7 @@ export default function BlueprintPage() {
       <div className="max-w-3xl mx-auto px-6 py-10">
         <div className="section-title mb-1">Blueprint & Import</div>
         <div className="font-display text-3xl font-bold mb-8" style={{ color: 'var(--text-primary)' }}>{deck?.name || '...'}</div>
-        <div className="space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-14 rounded-xl shimmer" />)}</div>
+        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-14 rounded-xl shimmer" />)}</div>
       </div>
     )
   }
@@ -653,6 +653,43 @@ export default function BlueprintPage() {
   )
 }
 
+// Keys that are mandatory — always present, cannot be deleted
+export const MANDATORY_FIELD_KEYS = ['source_translation', 'context']
+
+// Default definitions for mandatory fields
+const MANDATORY_DEFAULTS = {
+  source_translation: {
+    key: 'source_translation',
+    label: 'Translation',
+    description: 'A single short translation of the word in the source language. One word or a very short phrase only — no alternatives, no slash-separated variants.',
+    field_type: 'text',
+    show_on_front: false,
+    phonetics: { ruby: 'none', extras: [] },
+  },
+  context: {
+    key: 'context',
+    label: 'Context',
+    description: 'Grammatical or usage context shown on the card front to disambiguate — e.g. "(masculine singular)", "(verb, informal)", "(pl.)". Leave empty if not needed.',
+    field_type: 'text',
+    show_on_front: true,
+    phonetics: { ruby: 'none', extras: [] },
+  },
+}
+
+/**
+ * Ensure mandatory fields exist in the fields array.
+ * If missing, prepend them. Never removes or reorders existing ones.
+ */
+function ensureMandatoryFields(fields) {
+  const result = [...fields]
+  for (const key of [...MANDATORY_FIELD_KEYS].reverse()) {
+    if (!result.find(f => f.key === key)) {
+      result.unshift({ ...MANDATORY_DEFAULTS[key], phonetics: normalisePhonetics(MANDATORY_DEFAULTS[key].phonetics) })
+    }
+  }
+  return result
+}
+
 // ── Helpers ────────────────────────────────────────────────
 function normalisePhonetics(ph) {
   if (!ph) return { ruby: 'none', extras: [] }
@@ -671,6 +708,7 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
   const [showPhonetics, setShowPhonetics] = useState(false)
   const ph = normalisePhonetics(field.phonetics)
   const hasAnnotations = ph.ruby !== 'none' || ph.extras.length > 0
+  const isMandatory = MANDATORY_FIELD_KEYS.includes(field.key)
 
   const setRuby = ruby => onUpdate({ phonetics: { ...ph, ruby } })
   const toggleExtra = key => {
@@ -679,23 +717,40 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
   }
 
   return (
-    <div className="card rounded-xl overflow-hidden">
+    <div className="card rounded-xl overflow-hidden" style={isMandatory ? { borderColor: 'rgba(124,106,240,.3)' } : {}}>
       <div className="p-4 flex items-start gap-3">
         {/* Reorder */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 mt-1">
-          <button disabled={isFirst} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
-          <button disabled={isLast} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+          <button disabled={isFirst}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+          <button disabled={isLast}   className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
         </div>
 
         {/* Config */}
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <input className="input text-sm py-1.5 w-36" value={field.label}
-              onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
-            <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
-              onChange={e => onUpdate({ key: e.target.value.replace(/\s/g, '_').toLowerCase() })} placeholder="key" />
+            {isMandatory ? (
+              <>
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm w-36"
+                  style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,.2)' }}>
+                  <span style={{ fontSize: '10px' }}>🔒</span>
+                  <span className="font-medium">{field.label}</span>
+                </div>
+                <div className="text-xs font-mono px-2 py-1.5 rounded-lg w-28"
+                  style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                  {field.key}
+                </div>
+              </>
+            ) : (
+              <>
+                <input className="input text-sm py-1.5 w-36" value={field.label}
+                  onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
+                <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
+                  onChange={e => onUpdate({ key: e.target.value.replace(/\s/g,'_').toLowerCase() })} placeholder="key" />
+              </>
+            )}
             <select className="input text-xs py-1.5 w-36" value={field.field_type}
-              onChange={e => onUpdate({ field_type: e.target.value })}>
+              onChange={e => onUpdate({ field_type: e.target.value })}
+              disabled={isMandatory}>
               {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <label className="flex items-center gap-1.5 text-xs cursor-pointer flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
@@ -707,6 +762,19 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           <input className="input text-xs py-1.5 w-full" value={field.description || ''}
             onChange={e => onUpdate({ description: e.target.value })}
             placeholder="AI hint — describe what to put in this field" />
+
+          {field.key === 'context' && (
+            <div className="text-xs px-2 py-1.5 rounded-lg"
+              style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,.2)' }}>
+              ✦ Shown on card front in Source → Target mode as a disambiguation hint
+            </div>
+          )}
+          {field.key === 'source_translation' && (
+            <div className="text-xs px-2 py-1.5 rounded-lg"
+              style={{ background: 'rgba(0,212,168,.08)', color: 'var(--accent-secondary)', border: '1px solid rgba(0,212,168,.2)' }}>
+              ✦ Used as the typing target in Source → Target mode — keep it a single clean word
+            </div>
+          )}
 
           {field.field_type === 'example' && (
             <div className="text-xs px-2 py-1.5 rounded-lg"
@@ -734,8 +802,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
               {showPhonetics && (
                 <div className="mt-2 p-3 rounded-xl space-y-3"
                   style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-
-                  {/* Ruby dropdown */}
                   <div>
                     <div className="section-title mb-1.5">Ruby (shown above the word)</div>
                     <select className="input text-xs py-1.5" value={ph.ruby} onChange={e => setRuby(e.target.value)}>
@@ -749,8 +815,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
                       Only one ruby annotation can be shown at a time.
                     </div>
                   </div>
-
-                  {/* Extras checkboxes */}
                   <div>
                     <div className="section-title mb-1.5">Additional annotations</div>
                     <div className="space-y-1.5">
@@ -769,8 +833,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
                       ))}
                     </div>
                   </div>
-
-                  {/* Summary */}
                   {hasAnnotations && (
                     <div className="text-xs pt-2" style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}>
                       Gemini will generate:{' '}
@@ -785,7 +847,12 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           )}
         </div>
 
-        <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
+        {/* Delete button — hidden for mandatory fields */}
+        {isMandatory ? (
+          <div className="w-7 flex-shrink-0" />
+        ) : (
+          <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
+        )}
       </div>
     </div>
   )

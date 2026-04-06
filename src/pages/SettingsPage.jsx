@@ -80,6 +80,9 @@ export default function SettingsPage() {
             FSRS-5 active
           </span>
         </SettingRow>
+        <SettingRow label="Strict accents" desc="Require correct accent marks when typing (é ≠ e)">
+          <Toggle value={settings.strictAccents ?? true} onChange={v => updateSettings({ strictAccents: v })} />
+        </SettingRow>
         <SettingRow label="Animations" desc="Card flip and page transitions">
           <Toggle value={settings.animationsEnabled} onChange={v => updateSettings({ animationsEnabled: v })} />
         </SettingRow>

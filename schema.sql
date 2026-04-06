@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS cards (
   interval INTEGER DEFAULT 0,
   due TIMESTAMPTZ DEFAULT NOW(),
   last_reviewed TIMESTAMPTZ,
-  srs_state TEXT DEFAULT 'new',  -- 'new' | 'learning' | 'review' | 'relearning'
+  srs_state TEXT DEFAULT 'new',  -- 'new' | 'learning' | 'review'
+  learning_step INTEGER DEFAULT NULL, -- which learning step (0,1,...) the card is on; NULL when in review
   seen BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -65,6 +66,9 @@ CREATE INDEX IF NOT EXISTS cards_deck_id ON cards(deck_id);
 CREATE INDEX IF NOT EXISTS cards_user_id ON cards(user_id);
 CREATE INDEX IF NOT EXISTS cards_due ON cards(deck_id, due);
 CREATE INDEX IF NOT EXISTS cards_srs_state ON cards(deck_id, srs_state);
+
+-- Migration: add learning_step if upgrading an existing database
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS learning_step INTEGER DEFAULT NULL;
 
 -- Review log (for analytics / undo future feature)
 CREATE TABLE IF NOT EXISTS review_log (

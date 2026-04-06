@@ -362,6 +362,7 @@ export const useAppStore = create(
         defaultBatchSize: 20,
         defaultSourceLanguage: 'English',
         animationsEnabled: true,
+        strictAccents: true,
         quickAddFields: DEFAULT_QUICK_ADD,
       },
       updateSettings: (patch) => set((s) => {
