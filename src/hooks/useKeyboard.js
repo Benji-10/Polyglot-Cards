@@ -20,7 +20,11 @@ export function useStudyKeyboard({ flipped, onFlip, onRate, onExit, enabled = tr
 
       if (e.code === 'Space' || e.code === 'Enter') {
         e.preventDefault()
-        if (!flipped) onFlip?.()
+        // Always call onFlip — it decides what to do based on current phase:
+        //   passive+prompt  → reveal
+        //   active+revealed → advance
+        //   passive+revealed → nothing (ratings use 1-4)
+        onFlip?.()
       }
 
       if (flipped) {

@@ -307,8 +307,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const clozeInputRef     = useRef(null)
   const continueButtonRef = useRef(null)
 
-  // Accent characters extracted from word + source-language fields only (Latin extended, max 10)
-  const accentChars = useMemo(() => extractAccentChars(allCards, blueprint), [allCards, blueprint])
+  // Accent chars from source_translation values only — the one field users type
+  const accentChars = useMemo(() => extractAccentChars(allCards), [allCards])
 
   const reviewMutation = useMutation({
     mutationFn: ({ cardId, rating }) => api.recordReview(cardId, rating),
@@ -441,7 +441,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
         hard: s.hard + (autoRating === 2 ? 1 : 0),
       }))
     }
-    setTimeout(() => continueButtonRef.current?.focus(), 320)
+    // No need to focus Continue button — keyboard handler fires Space/Enter directly
   }
 
   const submitTyping = () => {
@@ -489,17 +489,18 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   if (done || total === 0) {
     return <SessionComplete stats={sessionStats} total={total} mode={mode} onEnd={onEnd} />
   }
-  if (!card || !front) return null
 
-  const card       = displayedCard   // what we actually render
-  const front      = card ? getFront(card, config.direction, blueprint, deck) : null
-  const clozeData  = (config.interaction === 'cloze' && exampleField && card)
+  const card      = displayedCard   // what we actually render
+  const front     = card ? getFront(card, config.direction, blueprint, deck) : null
+  const clozeData = (config.interaction === 'cloze' && exampleField && card)
     ? parseCloze(card.fields?.[exampleField.key] || '')
     : { hasCloze: false }
 
-  // flipped = card is showing back; during flip-back animation show as not flipped
-  const isRevealed   = phase === 'revealed'
-  const isFlipped    = phase === 'revealed'   // card-inner gets .flipped only when fully revealed
+  // flipped = card is showing back; 'flipping-back' removes .flipped so card rotates back
+  const isRevealed = phase === 'revealed'
+  const isFlipped  = phase === 'revealed'
+
+  if (!card || !front) return null
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col" style={{ minHeight: 'calc(100vh - 60px)' }}>
@@ -952,37 +953,23 @@ function isLatinExtended(ch) {
 }
 
 /**
- * Scan card words and source-language definition/reading fields only
- * for accented Latin chars. Returns up to 10, sorted by frequency.
- * Returns [] for CJK/Arabic/etc. decks.
+ * Scan source_translation field values for accented Latin chars.
+ * These are the only values the user types, so these are the only
+ * accents they need quick access to.
+ * Returns up to 10, sorted by frequency. Returns [] for CJK/Arabic/etc.
  */
-function extractAccentChars(cards, blueprint) {
+function extractAccentChars(cards) {
   if (!cards?.length) return []
-
-  // Only scan the target word and the source-language typed fields
-  // (definition, reading) — not example sentences or translation fields
-  const sourceFieldKeys = new Set(
-    (blueprint || [])
-      .filter(f => f.key === 'definition' || f.key === 'reading')
-      .map(f => f.key)
-  )
 
   const freq = {}
   for (const card of cards) {
-    const texts = [
-      card.word,
-      // Source-language fields only
-      ...Object.entries(card.fields || {})
-        .filter(([k]) => sourceFieldKeys.has(k))
-        .map(([, v]) => v),
-    ]
-    for (const text of texts) {
-      if (!text || typeof text !== 'string') continue
-      for (const ch of text) {
-        if (isLatinExtended(ch)) {
-          const lower = ch.toLowerCase()
-          freq[lower] = (freq[lower] || 0) + 1
-        }
+    // Only the source_translation field — the one thing users type
+    const text = card.fields?.source_translation
+    if (!text || typeof text !== 'string') continue
+    for (const ch of text) {
+      if (isLatinExtended(ch)) {
+        const lower = ch.toLowerCase()
+        freq[lower] = (freq[lower] || 0) + 1
       }
     }
   }
