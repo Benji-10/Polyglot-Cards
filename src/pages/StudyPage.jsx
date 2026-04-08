@@ -1057,7 +1057,7 @@ function AccentBar({ chars, onInsert }) {
   if (!chars.length) return null
 
   return (
-    <div className="flex gap-1 flex-wrap mt-2">
+    <div className="flex gap-1 flex-wrap mt-2 justify-center">
       {chars.map((ch, i) => (
         <button
           key={ch}

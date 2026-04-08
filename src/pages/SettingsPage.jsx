@@ -202,7 +202,14 @@ function QuickAddSection({ settings, updateSettings }) {
     key: `field_${Date.now()}`, label: 'New Field', description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] }
   }])
 
-  const updateField = (idx, patch) => setFields(fields.map((f, i) => i === idx ? { ...f, ...patch } : f))
+  const updateField = (idx, patch) => {
+    // If the label changed, auto-derive the key too
+    const field = fields[idx]
+    if (patch.label !== undefined && patch.key === undefined) {
+      patch = { ...patch, key: patch.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'field' }
+    }
+    setFields(fields.map((f, i) => i === idx ? { ...f, ...patch } : f))
+  }
   const removeField = (idx) => setFields(fields.filter((_, i) => i !== idx))
   const moveField = (idx, dir) => {
     const next = [...fields]
@@ -254,9 +261,6 @@ function QuickAddRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst,
 
         <input className="input text-xs py-1 min-w-0 flex-1" value={field.label}
           onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
-
-        <input className="input text-xs py-1 w-24 font-mono flex-shrink-0" value={field.key}
-          onChange={e => onUpdate({ key: e.target.value.replace(/\s/g, '_').toLowerCase() })} placeholder="key" />
 
         <select className="input text-xs py-1 w-28 flex-shrink-0" value={field.field_type}
           onChange={e => onUpdate({ field_type: e.target.value })}>

@@ -858,10 +858,12 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
         {/* Config */}
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <input className="input text-sm py-1.5 w-36" value={field.label}
-              onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
-            <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
-              onChange={e => onUpdate({ key: e.target.value.replace(/\s/g,'_').toLowerCase() })} placeholder="key" />
+            <input className="input text-sm py-1.5 flex-1 min-w-32" value={field.label}
+              onChange={e => {
+                const label = e.target.value
+                const key = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'field'
+                onUpdate({ label, key })
+              }} placeholder="Label" />
             <select className="input text-xs py-1.5 w-36" value={field.field_type}
               onChange={e => onUpdate({ field_type: e.target.value })}>
               {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}

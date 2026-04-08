@@ -59,5 +59,7 @@ export const api = {
   // User settings (cloud sync for theme etc.)
   getCloudSettings: () => fetchWithAuth('/settings'),
   saveCloudSettings: (patch) => fetchWithAuth('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
-    fetchWithAuth('/generate', { method: 'POST', body: JSON.stringify({ deckId, vocab, blueprint }) }),
+
+  // Gemini generation
+  generateCards: (deckId, vocab, blueprint) => fetchWithAuth('/generate', { method: 'POST', body: JSON.stringify({ deckId, vocab, blueprint }) }),
 }
