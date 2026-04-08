@@ -12,12 +12,18 @@ CREATE TABLE IF NOT EXISTS decks (
   source_language TEXT DEFAULT 'English',
   description TEXT,
   card_front_field TEXT DEFAULT 'auto',
+  context_language TEXT DEFAULT 'target', -- 'target' = context in target lang, 'source' = source lang
+  strict_accents   BOOLEAN DEFAULT true,  -- require exact accent marks when typing
+  strict_mode      BOOLEAN DEFAULT false, -- require exact match (no fuzzy)
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Migration: add source_language if upgrading an existing database
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS source_language TEXT DEFAULT 'English';
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS context_language TEXT DEFAULT 'target';
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_accents BOOLEAN DEFAULT true;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_mode BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS decks_user_id ON decks(user_id);
 
@@ -84,3 +90,15 @@ CREATE TABLE IF NOT EXISTS review_log (
 
 CREATE INDEX IF NOT EXISTS review_log_card ON review_log(card_id);
 CREATE INDEX IF NOT EXISTS review_log_user ON review_log(user_id, reviewed_at);
+
+-- Per-user app settings (theme, preferences) — synced across devices
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id TEXT PRIMARY KEY,
+  settings JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Deck-level typing settings
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_accents BOOLEAN DEFAULT true;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_mode BOOLEAN DEFAULT false;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS context_language TEXT DEFAULT 'target';

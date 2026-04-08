@@ -56,7 +56,8 @@ export const api = {
   getSRSCards: (deckId) => fetchWithAuth(`/srs?deckId=${deckId}`),
   recordReview: (cardId, rating) => fetchWithAuth('/srs', { method: 'POST', body: JSON.stringify({ cardId, rating }) }),
 
-  // Gemini generation
-  generateCards: (deckId, vocab, blueprint) =>
+  // User settings (cloud sync for theme etc.)
+  getCloudSettings: () => fetchWithAuth('/settings'),
+  saveCloudSettings: (patch) => fetchWithAuth('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
     fetchWithAuth('/generate', { method: 'POST', body: JSON.stringify({ deckId, vocab, blueprint }) }),
 }

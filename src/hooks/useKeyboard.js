@@ -10,7 +10,7 @@ import { useEffect } from 'react'
  * 4              → Easy
  * Escape         → exit session
  */
-export function useStudyKeyboard({ flipped, onFlip, onRate, onExit, enabled = true }) {
+export function useStudyKeyboard({ phase, isPassive, onReveal, onAdvance, onRate, onExit, enabled = true }) {
   useEffect(() => {
     if (!enabled) return
 
@@ -20,14 +20,20 @@ export function useStudyKeyboard({ flipped, onFlip, onRate, onExit, enabled = tr
 
       if (e.code === 'Space' || e.code === 'Enter') {
         e.preventDefault()
-        // Always call onFlip — it decides what to do based on current phase:
-        //   passive+prompt  → reveal
-        //   active+revealed → advance
-        //   passive+revealed → nothing (ratings use 1-4)
-        onFlip?.()
+        if (phase === 'prompt' && isPassive) {
+          // Passive prompt: flip to reveal
+          onReveal?.()
+        } else if (phase === 'revealed') {
+          if (isPassive) {
+            // Passive revealed: Space does nothing (use 1-4 to rate)
+          } else {
+            // Active revealed: advance to next card
+            onAdvance?.()
+          }
+        }
       }
 
-      if (flipped) {
+      if (phase === 'revealed' && isPassive) {
         if (e.key === '1') onRate?.(1)
         if (e.key === '2') onRate?.(2)
         if (e.key === '3') onRate?.(3)
@@ -39,7 +45,7 @@ export function useStudyKeyboard({ flipped, onFlip, onRate, onExit, enabled = tr
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [flipped, onFlip, onRate, onExit, enabled])
+  }, [phase, isPassive, onReveal, onAdvance, onRate, onExit, enabled])
 }
 
 /**

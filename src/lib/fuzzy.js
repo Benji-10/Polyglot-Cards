@@ -72,11 +72,12 @@ function normalise(str, stripAcc) {
  * @param {string} input         – what the user typed
  * @param {string} expected      – the correct answer
  * @param {object} [opts]
- * @param {boolean} [opts.strictAccents=true] – if false, accents are stripped before comparison
+ * @param {boolean} [opts.strictAccents=true]  – if false, accents are stripped before comparison
+ * @param {boolean} [opts.strictMode=false]    – if true, require exact match (no fuzzy tolerance)
  * @returns {{ correct: boolean, similarity: number, exact: boolean }}
  */
 export function fuzzyMatch(input, expected, opts = {}) {
-  const { strictAccents = true } = typeof opts === 'number' ? {} : opts
+  const { strictAccents = true, strictMode = false } = typeof opts === 'number' ? {} : opts
   // Back-compat: third arg used to be a numeric threshold
   const threshold = typeof opts === 'number' ? opts : 0.85
 
@@ -87,22 +88,26 @@ export function fuzzyMatch(input, expected, opts = {}) {
 
   if (a === b) return { correct: true, similarity: 1, exact: true }
 
+  // Strict mode: only exact match counts — no fuzzy tolerance
+  if (strictMode) return { correct: false, similarity: 0, exact: false }
+
   const maxLen = Math.max(a.length, b.length)
   if (maxLen === 0) return { correct: true, similarity: 1, exact: true }
 
   const dist       = damerauLevenshtein(a, b)
   const similarity = 1 - dist / maxLen
 
-  // Short-word protection
+  // Short-word protection — allow 1 DL edit even for short words,
+  // but require exact match for very short (≤2) words
   let effectiveThreshold
   if (maxLen <= 2) {
-    effectiveThreshold = 1.0          // must be exact
+    effectiveThreshold = 1.0                             // must be exact (e.g. "el", "la")
   } else if (maxLen <= 4) {
-    effectiveThreshold = 0.9          // 1 typo max for short words
+    effectiveThreshold = 0.75                            // allows 1 edit on 4-char words (75%)
   } else if (isCJK(b)) {
-    effectiveThreshold = Math.max(threshold, 0.9)  // CJK: strict
+    effectiveThreshold = Math.max(threshold, 0.9)        // CJK: strict
   } else {
-    effectiveThreshold = threshold    // standard (0.85)
+    effectiveThreshold = threshold                       // standard (0.85)
   }
 
   return {

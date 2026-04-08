@@ -178,8 +178,8 @@ function EmptyState({ onCreate }) {
 function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
   const [form, setForm] = useState(
     deck
-      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto' }
-      : { name: '', target_language: 'Korean', source_language: defaultSource || 'English', description: '', card_front_field: 'auto' }
+      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto', context_language: deck.context_language || 'target', strict_accents: deck.strict_accents !== false, strict_mode: deck.strict_mode === true }
+      : { name: '', target_language: 'Korean', source_language: defaultSource || 'English', description: '', card_front_field: 'auto', context_language: 'target', strict_accents: true, strict_mode: false }
   )
 
   const isEdit = !!deck
@@ -234,6 +234,49 @@ function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
           </select>
         </div>
 
+        <div>
+          <label className="section-title block mb-1.5">Context on card front (Target → Source)</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { v: 'target', label: 'Context field', desc: 'Short grammatical hint in target language (e.g. 명사, 단수)' },
+              { v: 'cloze',  label: 'Cloze sentence', desc: 'Example sentence with the word blanked out' },
+            ].map(({ v, label, desc }) => (
+              <button key={v} type="button"
+                className="flex flex-col items-start p-3 rounded-xl border transition-all text-left"
+                style={{ borderColor: form.context_language === v ? 'var(--accent-primary)' : 'var(--border)', background: form.context_language === v ? 'var(--accent-glow)' : 'transparent' }}
+                onClick={() => setForm(f => ({ ...f, context_language: v }))}>
+                <span className="text-xs font-medium" style={{ color: form.context_language === v ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{label}</span>
+                <span className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{desc}</span>
+              </button>
+            ))}
+          </div>
+          <div className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
+            Helps distinguish homographs like 눈 (eye vs snow) when shown the target word.
+          </div>
+        </div>
+
+        <div>
+          <label className="section-title block mb-1.5">Typing settings</label>
+          <div className="space-y-2">
+            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+              <div>
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Strict accents</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Require correct accent marks (é ≠ e)</div>
+              </div>
+              <ToggleSwitch value={form.strict_accents} onChange={v => setForm(f => ({ ...f, strict_accents: v }))} />
+            </label>
+            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+              <div>
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Strict mode</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Exact spelling required — no typo tolerance</div>
+              </div>
+              <ToggleSwitch value={form.strict_mode} onChange={v => setForm(f => ({ ...f, strict_mode: v }))} />
+            </label>
+          </div>
+        </div>
+
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1"
@@ -244,5 +287,17 @@ function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
         </div>
       </div>
     </Modal>
+  )
+}
+
+function ToggleSwitch({ value, onChange }) {
+  return (
+    <button role="switch" aria-checked={value} type="button"
+      className="w-11 h-6 rounded-full transition-colors relative flex-shrink-0"
+      style={{ background: value ? 'var(--accent-primary)' : 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+      onClick={() => onChange(!value)}>
+      <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+        style={{ left: value ? '24px' : '3px' }} />
+    </button>
   )
 }

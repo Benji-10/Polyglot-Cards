@@ -2,7 +2,7 @@ import { requireUser, json, error, handleCors } from './_db.js'
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
 
-function buildPrompt(targetLanguage, blueprint, vocabBatch) {
+function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
   // Normalise phonetics regardless of shape (old array or new {ruby,extras} object)
   function getPhoneticKeys(ph) {
     if (!ph) return []
@@ -34,14 +34,18 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
   const fieldLines = blueprint.map(f => {
     const lines = [`  - "${f.key}": ${f.description || f.label}`]
     if (f.key === 'source_translation') {
-      lines.push(`    CRITICAL: This must be a SINGLE short word or very short phrase in the source language.`)
+      lines.push(`    CRITICAL: This must be a SINGLE short word or very short phrase in ${sourceLanguage}.`)
       lines.push(`    Do NOT use slash-separated alternatives (e.g. "love" not "love/affection").`)
+      lines.push(`    For homographs, this must match the specific meaning (_sense) of this card only.`)
       lines.push(`    Do NOT include articles, grammatical markers, or explanations here.`)
     }
     if (f.key === 'context') {
-      lines.push(`    Provide a brief grammatical or usage hint that disambiguates the word — e.g. "(masculine singular)", "(verb)", "(pl.)", "(formal)".`)
-      lines.push(`    Leave as empty string "" if the word needs no disambiguation.`)
-      lines.push(`    Do NOT repeat the translation here. This is purely a disambiguation hint.`)
+      const ctxLang = contextLanguage === 'source' ? sourceLanguage : targetLanguage
+      lines.push(`    Write this in ${ctxLang}.`)
+      lines.push(`    Provide a very brief grammatical or usage hint that disambiguates this specific meaning.`)
+      lines.push(`    Examples in ${ctxLang}: grammatical gender, number, part of speech, register, or usage domain.`)
+      lines.push(`    For homographs this is critical — it must distinguish this meaning from the other(s).`)
+      lines.push(`    Keep it very short (2-5 words). Leave as "" if the word is unambiguous.`)
     }
     if (f.field_type === 'example') {
       lines.push(`    Generate 3 varied example sentences, separated by " ;;; " (space-semicolonsemicolonsemicolon-space).`)
@@ -63,27 +67,36 @@ function buildPrompt(targetLanguage, blueprint, vocabBatch) {
   return `You are a language learning assistant generating flashcard data.
 
 Target language: ${targetLanguage}
-Vocabulary items to process: ${JSON.stringify(vocabBatch)}
+Source language: ${sourceLanguage}
 
 HOMOGRAPH RULE — CRITICAL:
-Some words have multiple unrelated meanings (homographs). For example, Korean "눈" means both "eye" and "snow".
-- If a word has 2 or more distinct unrelated meanings, output ONE separate JSON object per meaning.
-- Each object must have "_meanings": <total number of distinct meanings for this word> and "_sense": "<very brief disambiguating label in the source language, e.g. 'eye' or 'snow'>".
-- If a word has only one meaning, set "_meanings": 1 and "_sense": "".
-- Do NOT combine multiple meanings into one card (e.g. do NOT write "eye/snow" in the definition field).
+A homograph is a word with multiple distinct, unrelated meanings. Examples:
+- Korean "눈" → "eye" (body part) AND "snow" (weather) → 2 cards
+- Spanish "café" → "coffee" (beverage) AND "café" (establishment) AND "brown" (colour) → 3 cards
+- English "bank" → financial institution AND river bank → 2 cards
+
+Rules for homographs:
+- Ensure that all possible, distinct meanings of homographs are included, such as different senses related to places, actions, objects, or colors.
+- If a word has 2 or more COMMON unrelated meanings, output ONE separate JSON object per meaning.
+- Include meanings that are common in everyday usage — do not limit to one meaning when multiple are well-known.
+- Each object must have "_meanings": <total count> and "_sense": "<very brief source-language label, e.g. 'beverage', 'colour', 'place'>".
+- If a word has only one common meaning, set "_meanings": 1 and "_sense": "".
+- Do NOT combine multiple meanings into one card with slash notation.
+- Do NOT omit a meaning just because another meaning is more common.
 
 For each vocabulary item (or each meaning if a homograph), generate a JSON object with these fields:
   - "word": the vocabulary item exactly as given
-  - "_meanings": integer — total number of distinct unrelated meanings this word has
-  - "_sense": string — brief source-language label for THIS meaning only (empty string if _meanings is 1)
+  - "_meanings": integer — total number of distinct common meanings this word has
+  - "_sense": string — very brief source-language label for THIS meaning only (empty string if _meanings is 1)
 ${fieldLines}
 
 Rules:
 - Return ONLY a valid JSON array, no markdown, no explanation, no code fences.
 - Process every word in the input list.
 - Keep entries concise and accurate.
-- "source_translation" must be ONE clean word or very short phrase — no slashes, no alternatives, no parenthetical notes.
-- "context" is only for grammatical disambiguation (gender, number, register) — leave "" if not needed.
+- "source_translation" must be ONE clean word in ${sourceLanguage} — no slashes, no alternatives, no parenthetical notes. Match the specific meaning of this card.
+- "context" must be written in ${contextLanguage === 'cloze' || contextLanguage === 'target' ? targetLanguage : sourceLanguage}, very brief (2-5 words), disambiguates THIS specific meaning. For homographs this is essential. Leave "" if the word is unambiguous.
+- CRITICAL FOR HOMOGRAPHS: When a word has multiple meanings, every field in each card object MUST correspond to the specific meaning indicated by "_sense" for that card. Do not mix fields from different meanings. For example, if generating cards for a word that means both "pear" (fruit) and "stomach" (body part), the card for "pear" must have Japanese/Chinese/etc. translations for "pear" only, and the card for "stomach" must have those translations for "stomach" only. Never cross-contaminate fields between different senses.
 - If you cannot generate a field, use an empty string "".
 
 Expected output keys per item: ${exampleKeys.join(', ')}
@@ -100,16 +113,18 @@ export const handler = async (event) => {
 
     const { vocab, blueprint } = JSON.parse(event.body)
 
-    // vocab is { vocab: string[], targetLanguage: string }
+    // vocab is { vocab: string[], targetLanguage: string, sourceLanguage?: string, contextLanguage?: string }
     if (!vocab?.vocab || !blueprint) return error('vocab and blueprint required')
 
-    const vocabArray = vocab.vocab
-    const targetLanguage = vocab.targetLanguage || 'Korean'
+    const vocabArray      = vocab.vocab
+    const targetLanguage  = vocab.targetLanguage  || 'Korean'
+    const sourceLanguage  = vocab.sourceLanguage  || 'English'
+    const contextLanguage = vocab.contextLanguage || 'target' // 'target' | 'source'
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return error('Gemini API key not configured', 500)
 
-    const prompt = buildPrompt(targetLanguage, blueprint, vocabArray)
+    const prompt = buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
 
     // Call Gemini with exponential backoff — retries on 503/429 (rate limit / overload)
     const MAX_RETRIES = 4

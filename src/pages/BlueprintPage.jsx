@@ -129,7 +129,9 @@ export default function BlueprintPage() {
   const [progressMsg, setProgressMsg] = useState('')
   const [totalImported, setTotalImported] = useState(0)
   // Homograph review: cards pending user approval before saving
-  const [homographPending, setHomographPending] = useState(null) // { groups: [{word, senses: [{card, selected}]}], onConfirm }
+  const [homographPending, setHomographPending] = useState(null) // { groups, onConfirm }
+  // Collision review: incoming cards that match an existing word
+  const [collisionPending, setCollisionPending] = useState(null) // { collisions, noCollision, blueprint, onConfirm }
 
   const progress = usePredictiveProgress()
 
@@ -229,7 +231,9 @@ export default function BlueprintPage() {
     setRegenMsg(`Updating ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} across ${allCards.length} cards…`)
     updateRegenBar(0)
 
-    let done = 0
+    let totalPatched = 0
+    let anyFailed = false
+    const failedBatches = []
     const targetLang = deckRef.current?.target_language || 'Korean'
 
     for (let i = 0; i < batches.length; i++) {
@@ -249,18 +253,23 @@ export default function BlueprintPage() {
       }
       regenRafRef.current = requestAnimationFrame(tickRegen)
 
+      let batchSucceeded = false
       try {
         const genRes = await api.generateCards(
           deckId,
-          { vocab: batchWords, targetLanguage: targetLang },
-          regenFields // Only send changed fields to generate
+          {
+            vocab: batchWords,
+            targetLanguage: targetLang,
+            sourceLanguage: deckRef.current?.source_language || 'English',
+            contextLanguage: deckRef.current?.context_language || 'target',
+          },
+          regenFields
         )
 
         if (genRes?.cards?.length) {
-          // Build patches: for each returned card, only pick keys from regenFields
+          // Build patches — only include fields that Gemini actually returned and aren't error stubs
           const changedKeys = regenFields.flatMap(f => {
             const keys = [f.key]
-            // Include phonetic sub-keys
             const ph = f.phonetics
             if (ph && !Array.isArray(ph)) {
               if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
@@ -273,29 +282,53 @@ export default function BlueprintPage() {
             .filter(c => c.word && !c._error)
             .map(c => {
               const fields = {}
-              changedKeys.forEach(k => { if (k in c && k !== 'word') fields[k] = c[k] })
+              changedKeys.forEach(k => {
+                // Only include the field if Gemini returned a non-empty value
+                if (k in c && k !== 'word' && c[k] !== '') fields[k] = c[k]
+              })
               return { word: c.word, fields }
             })
             .filter(p => Object.keys(p.fields).length > 0)
 
           if (patches.length > 0) {
             await api.patchCards(deckId, patches)
-            done += patches.length
+            totalPatched += patches.length
           }
+          batchSucceeded = true
         }
       } catch (e) {
-        console.error('Regen batch error:', e)
+        console.error(`Regen batch ${i + 1} error:`, e)
+        failedBatches.push(i + 1)
+        anyFailed = true
       }
 
       if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
       updateRegenBar(batchCeil)
-      setRegenMsg(`Updated ${done} cards…`)
+      if (batchSucceeded) {
+        setRegenMsg(`Updated ${totalPatched} cards…`)
+      } else {
+        setRegenMsg(`Batch ${i + 1} failed — continuing…`)
+      }
     }
 
     qc.invalidateQueries({ queryKey: ['cards', deckId] })
-    originalBlueprintRef.current = savedFields
-    setRegenState('done')
-    setRegenMsg(`${done} card${done !== 1 ? 's' : ''} refreshed`)
+
+    if (anyFailed) {
+      // Keep originalBlueprintRef pointing to oldFields for ONLY the failed fields
+      // so the next save will retry them. Successful fields are committed.
+      // Simplest safe approach: revert entirely so next save retries all changed fields.
+      originalBlueprintRef.current = oldFields
+      setRegenState('error')
+      const failedStr = failedBatches.join(', ')
+      setRegenMsg(
+        `${totalPatched} cards updated. Batches ${failedStr} failed — save again to retry.`
+      )
+      toast.error(`Card update partially failed (batch${failedBatches.length > 1 ? 'es' : ''} ${failedStr}). Save the blueprint again to retry.`)
+    } else {
+      originalBlueprintRef.current = savedFields
+      setRegenState('done')
+      setRegenMsg(`${totalPatched} card${totalPatched !== 1 ? 's' : ''} refreshed`)
+    }
     updateRegenBar(100)
   }
 
@@ -382,7 +415,12 @@ export default function BlueprintPage() {
               try {
                 genRes = await api.generateCards(
                   deckId,
-                  { vocab: batches[i], targetLanguage: deckRef.current?.target_language || 'Korean' },
+                  {
+                    vocab: batches[i],
+                    targetLanguage: deckRef.current?.target_language || 'Korean',
+                    sourceLanguage: deckRef.current?.source_language || 'English',
+                    contextLanguage: deckRef.current?.context_language || 'target',
+                  },
                   fieldsRef.current || []
                 )
                 lastErr = null
@@ -429,6 +467,53 @@ export default function BlueprintPage() {
               senses: cards.map(c => ({ card: c, selected: true, sense: c._sense || '' })),
             }))
 
+          // Function that detects collisions then saves
+          const proceedToCollisionCheck = async (cardsToSave) => {
+            // Find cards whose word already exists in this deck
+            const existingByWord = {}
+            for (const c of allCardsRef.current) existingByWord[c.word] = c
+
+            const collisions = cardsToSave
+              .map(c => ({ incoming: c, existing: existingByWord[c.word] }))
+              .filter(({ existing }) => existing)
+
+            const noCollision = cardsToSave.filter(c => !existingByWord[c.word])
+
+            if (collisions.length === 0) {
+              await saveCards(noCollision)
+            } else {
+              setImportState('review')
+              setCollisionPending({
+                collisions,
+                noCollision,
+                blueprint: fieldsRef.current || [],
+                onConfirm: async (decisions) => {
+                  // decisions: [{ incoming, action: 'add'|'update'|'skip' }]
+                  setCollisionPending(null)
+                  setImportState('generating')
+
+                  const toAdd    = [...noCollision]
+                  const toUpdate = []
+                  for (const { incoming, action } of decisions) {
+                    if (action === 'add')    toAdd.push(incoming)
+                    if (action === 'update') toUpdate.push(incoming)
+                  }
+
+                  // Patch existing cards with updated fields
+                  if (toUpdate.length) {
+                    const patches = toUpdate.map(c => {
+                      const { _meanings, _sense, _error, word, ...fields } = c
+                      return { word, fields }
+                    })
+                    await api.patchCards(deckId, patches).catch(() => {})
+                  }
+
+                  await saveCards(toAdd)
+                },
+              })
+            }
+          }
+
           // Function that actually saves the chosen cards
           const saveCards = async (cardsToSave) => {
             const toSave = cardsToSave.map(c => {
@@ -438,15 +523,15 @@ export default function BlueprintPage() {
             })
             if (toSave.length) {
               await batchSaveMutation.mutateAsync(toSave)
-              setTotalImported(toSave.length)
+              setTotalImported(prev => prev + toSave.length)
             }
             setImportState('done')
             qc.invalidateQueries({ queryKey: ['cards', deckId] })
           }
 
           if (homographGroups.length === 0) {
-            // No homographs — save immediately
-            await saveCards(allGeneratedCards)
+            // No homographs — check collisions then save
+            await proceedToCollisionCheck(allGeneratedCards)
           } else {
             // Pause import and show homograph review modal
             setImportState('review')
@@ -459,7 +544,7 @@ export default function BlueprintPage() {
                 // Replace homograph words with only the approved senses
                 const homographWords = new Set(homographGroups.map(g => g.word))
                 const nonHomographCards = allGeneratedCards.filter(c => !homographWords.has(c.word))
-                await saveCards([...nonHomographCards, ...approvedHomographCards])
+                await proceedToCollisionCheck([...nonHomographCards, ...approvedHomographCards])
               },
             })
           }
@@ -650,6 +735,16 @@ export default function BlueprintPage() {
           onClose={() => { setHomographPending(null); setImportState('done') }}
         />
       )}
+
+      {/* ── Collision review modal ──────────────────────── */}
+      {collisionPending && (
+        <CollisionModal
+          collisions={collisionPending.collisions}
+          blueprint={collisionPending.blueprint}
+          onConfirm={(decisions) => collisionPending.onConfirm(decisions)}
+          onClose={() => { setCollisionPending(null); setImportState('done') }}
+        />
+      )}
     </div>
   )
 }
@@ -717,8 +812,42 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
     onUpdate({ phonetics: { ...ph, extras: next } })
   }
 
+  // ── Mandatory field — fully locked, compact display ────────
+  if (isMandatory) {
+    const descriptions = {
+      source_translation: 'Single clean word in your source language. Used as the typing target in Source → Target mode.',
+      context: 'Grammatical hint shown on the card front (Target → Source) to disambiguate homographs. Generated in the target language.',
+    }
+    const colors = {
+      source_translation: { bg: 'rgba(0,212,168,.08)', border: 'rgba(0,212,168,.25)', text: 'var(--accent-secondary)', icon: '🎯' },
+      context:            { bg: 'var(--accent-glow)',   border: 'rgba(124,106,240,.3)', text: 'var(--accent-primary)',   icon: '💡' },
+    }
+    const c = colors[field.key] || colors.context
+    return (
+      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${c.border}`, background: c.bg }}>
+        <div className="p-3 flex items-center gap-3">
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            <button disabled={isFirst} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+            <button disabled={isLast}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+          </div>
+          <span style={{ fontSize: '14px' }}>{c.icon}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium" style={{ color: c.text }}>{field.label}</span>
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>{field.key}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>🔒 mandatory</span>
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{descriptions[field.key]}</div>
+          </div>
+          <div className="w-7 flex-shrink-0" />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Regular editable field ─────────────────────────────────
   return (
-    <div className="card rounded-xl overflow-hidden" style={isMandatory ? { borderColor: 'rgba(124,106,240,.3)' } : {}}>
+    <div className="card rounded-xl overflow-hidden">
       <div className="p-4 flex items-start gap-3">
         {/* Reorder */}
         <div className="flex flex-col gap-0.5 flex-shrink-0 mt-1">
@@ -729,29 +858,12 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
         {/* Config */}
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
-            {isMandatory ? (
-              <>
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm w-36"
-                  style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,.2)' }}>
-                  <span style={{ fontSize: '10px' }}>🔒</span>
-                  <span className="font-medium">{field.label}</span>
-                </div>
-                <div className="text-xs font-mono px-2 py-1.5 rounded-lg w-28"
-                  style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
-                  {field.key}
-                </div>
-              </>
-            ) : (
-              <>
-                <input className="input text-sm py-1.5 w-36" value={field.label}
-                  onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
-                <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
-                  onChange={e => onUpdate({ key: e.target.value.replace(/\s/g,'_').toLowerCase() })} placeholder="key" />
-              </>
-            )}
+            <input className="input text-sm py-1.5 w-36" value={field.label}
+              onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
+            <input className="input text-sm py-1.5 w-28 font-mono" value={field.key}
+              onChange={e => onUpdate({ key: e.target.value.replace(/\s/g,'_').toLowerCase() })} placeholder="key" />
             <select className="input text-xs py-1.5 w-36" value={field.field_type}
-              onChange={e => onUpdate({ field_type: e.target.value })}
-              disabled={isMandatory}>
+              onChange={e => onUpdate({ field_type: e.target.value })}>
               {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <label className="flex items-center gap-1.5 text-xs cursor-pointer flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
@@ -763,19 +875,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           <input className="input text-xs py-1.5 w-full" value={field.description || ''}
             onChange={e => onUpdate({ description: e.target.value })}
             placeholder="AI hint — describe what to put in this field" />
-
-          {field.key === 'context' && (
-            <div className="text-xs px-2 py-1.5 rounded-lg"
-              style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,.2)' }}>
-              ✦ Shown on card front in Source → Target mode as a disambiguation hint
-            </div>
-          )}
-          {field.key === 'source_translation' && (
-            <div className="text-xs px-2 py-1.5 rounded-lg"
-              style={{ background: 'rgba(0,212,168,.08)', color: 'var(--accent-secondary)', border: '1px solid rgba(0,212,168,.2)' }}>
-              ✦ Used as the typing target in Source → Target mode — keep it a single clean word
-            </div>
-          )}
 
           {field.field_type === 'example' && (
             <div className="text-xs px-2 py-1.5 rounded-lg"
@@ -848,12 +947,7 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
           )}
         </div>
 
-        {/* Delete button — hidden for mandatory fields */}
-        {isMandatory ? (
-          <div className="w-7 flex-shrink-0" />
-        ) : (
-          <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
-        )}
+        <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
       </div>
     </div>
   )
@@ -982,6 +1076,106 @@ function HomographModal({ groups, blueprint, onConfirm, onClose }) {
         <button className="btn-secondary flex-1" onClick={onClose}>Skip all homographs</button>
         <button className="btn-primary flex-1" onClick={handleConfirm} disabled={totalSelected === 0}>
           Import {totalSelected} card{totalSelected !== 1 ? 's' : ''} →
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// ── CollisionModal ─────────────────────────────────────────
+// Shows words that already exist in the deck and lets the user choose
+// what to do: update existing fields, add as a new card, or skip.
+const COLLISION_ACTIONS = [
+  { value: 'update', label: 'Update', sub: 'Overwrite existing card', color: 'var(--accent-primary)' },
+  { value: 'add',    label: 'Add',    sub: 'Keep both as new card',   color: 'var(--accent-secondary)' },
+  { value: 'skip',   label: 'Skip',   sub: 'Discard incoming',        color: 'var(--text-muted)' },
+]
+
+function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
+  const [decisions, setDecisions] = useState(() =>
+    collisions.map(({ incoming }) => ({ incoming, action: 'update' }))
+  )
+
+  const setAction = (idx, action) =>
+    setDecisions(prev => prev.map((d, i) => i === idx ? { ...d, action } : d))
+
+  const skipped  = decisions.filter(d => d.action === 'skip').length
+  const imported = decisions.length - skipped
+
+  const defField = blueprint?.find(f => f.key === 'source_translation')
+    || blueprint?.find(f => f.key === 'definition')
+
+  return (
+    <Modal title="Duplicate Words Detected" onClose={onClose} size="lg">
+      <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+        {collisions.length} word{collisions.length !== 1 ? 's' : ''} already exist{collisions.length === 1 ? 's' : ''} in this deck. Choose what to do with each.
+      </p>
+
+      <div className="space-y-3 max-h-[55vh] overflow-auto pr-1">
+        {decisions.map(({ incoming, action }, idx) => {
+          const existing   = collisions[idx].existing
+          const existingVal = defField ? existing.fields?.[defField.key] : null
+          const incomingVal = defField ? incoming[defField.key] : null
+
+          return (
+            <div key={incoming.word + idx} className="rounded-xl p-4"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+              <div className="mb-3">
+                <div className="font-display font-bold text-base mb-1" style={{ color: 'var(--accent-primary)' }}>
+                  {incoming.word}
+                </div>
+                <div className="flex gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <span>
+                    <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Existing: </span>
+                    {existingVal || '—'}
+                  </span>
+                  {incomingVal && incomingVal !== existingVal && (
+                    <span>
+                      <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>New: </span>
+                      {incomingVal}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                {COLLISION_ACTIONS.map(opt => (
+                  <button key={opt.value}
+                    className="flex-1 flex flex-col items-center gap-0.5 px-2 py-2.5 rounded-xl border text-xs transition-all"
+                    style={{
+                      borderColor: action === opt.value ? opt.color : 'var(--border)',
+                      background:  action === opt.value ? `rgba(0,0,0,0.2)` : 'transparent',
+                      color:       action === opt.value ? opt.color : 'var(--text-secondary)',
+                      boxShadow:   action === opt.value ? `0 0 0 1px ${opt.color}` : 'none',
+                    }}
+                    onClick={() => setAction(idx, opt.value)}>
+                    <span className="font-semibold">{opt.label}</span>
+                    <span className="opacity-60 text-center leading-tight">{opt.sub}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Apply-to-all row */}
+      <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Apply to all:</span>
+        {COLLISION_ACTIONS.map(opt => (
+          <button key={opt.value}
+            className="btn-ghost text-xs py-1 px-2.5"
+            style={{ color: opt.color }}
+            onClick={() => setDecisions(prev => prev.map(d => ({ ...d, action: opt.value })))}>
+            {opt.label} all
+          </button>
+        ))}
+      </div>
+
+      <div className="flex gap-3 mt-4">
+        <button className="btn-secondary flex-1" onClick={onClose}>Cancel import</button>
+        <button className="btn-primary flex-1" onClick={() => onConfirm(decisions)}>
+          Confirm — {imported} card{imported !== 1 ? 's' : ''}{skipped > 0 ? ` (${skipped} skipped)` : ''}
         </button>
       </div>
     </Modal>
