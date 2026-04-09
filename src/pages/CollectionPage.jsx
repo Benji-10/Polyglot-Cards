@@ -80,6 +80,69 @@ export default function CollectionPage() {
     toast.success('SRS progress reset.')
   }, [selected, deckId, qc, toast])
 
+  // Export selected cards (or all cards if none selected) as CSV
+  // Format:
+  //   Row 1: headers — word, [field keys], srs_state, last_reviewed, interval, stability, difficulty, repetitions
+  //   Row 2: metadata — JSON per column with field definition (label, description, field_type, show_on_front, phonetics)
+  //   Row 3+: data
+  const exportCards = useCallback((cardSubset) => {
+    if (!cardSubset.length) return
+
+    const bpKeys = blueprint.map(f => f.key)
+    const allFieldKeys = [...new Set([...bpKeys, ...cardSubset.flatMap(c => Object.keys(c.fields || {}))])]
+    const SRS_COLS = ['srs_state', 'last_reviewed', 'interval', 'stability', 'difficulty', 'repetitions']
+    const headers = ['word', ...allFieldKeys, ...SRS_COLS]
+
+    // Build a map of field key → blueprint field definition for the metadata row
+    const bpByKey = {}
+    for (const f of blueprint) bpByKey[f.key] = f
+
+    const escape = v => {
+      const s = String(v ?? '')
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+    }
+
+    // Metadata row — JSON per blueprint field column, empty for word/SRS columns
+    const metaRow = headers.map(h => {
+      const f = bpByKey[h]
+      if (!f) return ''
+      return escape(JSON.stringify({
+        label:        f.label,
+        description:  f.description || '',
+        field_type:   f.field_type  || 'text',
+        show_on_front: f.show_on_front || false,
+        phonetics:    f.phonetics   || { ruby: 'none', extras: [] },
+      }))
+    })
+
+    const dataRows = cardSubset.map(card => {
+      const row = { word: card.word }
+      for (const k of allFieldKeys) row[k] = card.fields?.[k] ?? ''
+      row.srs_state     = card.srs_state     ?? ''
+      row.last_reviewed = card.last_reviewed  ?? ''
+      row.interval      = card.interval       ?? ''
+      row.stability     = card.stability      ?? ''
+      row.difficulty    = card.difficulty     ?? ''
+      row.repetitions   = card.repetitions    ?? ''
+      return headers.map(h => escape(row[h])).join(',')
+    })
+
+    const csv = [
+      headers.map(escape).join(','),
+      metaRow.join(','),
+      ...dataRows,
+    ].join('\n')
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `cards-export-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`Exported ${cardSubset.length} card${cardSubset.length !== 1 ? 's' : ''}.`)
+  }, [blueprint, toast])
+
   const now = new Date()
 
   const filtered = useMemo(() => {
@@ -149,6 +212,10 @@ export default function CollectionPage() {
               </span>
             </h1>
           </div>
+          <button className="btn-secondary text-xs py-1.5 px-3" onClick={() => exportCards(filtered)}
+            disabled={!filtered.length}>
+            Export {filtered.length !== cards.length ? 'filtered' : 'all'}
+          </button>
         </div>
 
         {/* Search + filters */}
@@ -181,6 +248,10 @@ export default function CollectionPage() {
             <div className="flex gap-2 ml-auto">
               <button className="btn-ghost text-xs py-1 px-2.5" onClick={() => setSelected(new Set())}>
                 Clear
+              </button>
+              <button className="btn-secondary text-xs py-1 px-2.5"
+                onClick={() => exportCards(cards.filter(c => selected.has(c.id)))}>
+                Export
               </button>
               <button className="btn-secondary text-xs py-1 px-2.5" onClick={bulkResetSRS}>
                 Reset SRS

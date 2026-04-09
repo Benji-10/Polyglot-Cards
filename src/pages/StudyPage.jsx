@@ -93,6 +93,7 @@ export default function StudyPage() {
       dueCards={dueCards}
       strictAccents={deck?.strict_accents !== false}
       strictMode={deck?.strict_mode === true}
+      animationsEnabled={settings.animationsEnabled !== false}
       onEnd={() => setSessionConfig(null)}
     />
   )
@@ -279,7 +280,7 @@ function Toggle({ value, onChange }) {
 // ─────────────────────────────────────────────
 // STUDY SESSION
 // ─────────────────────────────────────────────
-function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, strictAccents = true, strictMode = false, onEnd }) {
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, strictAccents = true, strictMode = false, animationsEnabled = true, onEnd }) {
   const qc = useQueryClient()
   const exampleField = blueprint.find(f => f.field_type === 'example')
 
@@ -540,6 +541,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           blueprint={blueprint}
           flipped={isFlipped}
           deck={deck}
+          animationsEnabled={animationsEnabled}
           onFlip={config.interaction === 'passive' ? () => reveal(null) : null}
           resultBadge={lastResult && isRevealed
             ? { correct: lastResult.correct, label: lastResult.correct ? `✓ ${Math.round((lastResult.similarity || 1) * 100)}%` : `✗ ${lastResult.answer || ''}` }
@@ -663,10 +665,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                     })
                   }} />
                 )}
-                <div className="flex gap-3">
-                  <button className="btn-secondary flex-1" onClick={() => reveal({ correct: false, answer: clozeData.answer })}>Skip</button>
-                  <button className="btn-primary flex-1" onClick={submitCloze}>Check</button>
-                </div>
+                <button className="btn-primary mt-3 w-full" onClick={submitCloze}>Check</button>
               </div>
             ) : (
               <div className="card p-5 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
@@ -821,14 +820,17 @@ function getAnswer(card, direction, blueprint, deck) {
 }
 
 // ── PassiveCard — 3D flip card ─────────────────────────────
-function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onFlip, resultBadge }) {
+function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onFlip, resultBadge, animationsEnabled = true }) {
   const frontField = blueprint.find(f => f.show_on_front && f.key !== 'context')
 
   return (
     <div className="w-full max-w-lg card-3d"
       style={{ cursor: !flipped && onFlip ? 'pointer' : 'default', height: '280px', position: 'relative' }}
       onClick={!flipped && onFlip ? onFlip : undefined}>
-      <div className={`card-inner w-full h-full ${flipped ? 'flipped' : ''}`} style={{ position: 'relative' }}>
+      <div
+        className={`card-inner w-full h-full ${flipped ? 'flipped' : ''}`}
+        style={{ position: 'relative', transition: animationsEnabled ? undefined : 'none' }}
+      >
 
         {/* FRONT — uses frontCard, updates immediately on advance */}
         <div className="card-face card-elevated flex flex-col items-center justify-center p-8 rounded-2xl select-none">

@@ -308,3 +308,22 @@
 .stagger-children > *:nth-child(4) { animation-delay: 150ms; }
 .stagger-children > *:nth-child(5) { animation-delay: 200ms; }
 .stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+/* ── No-animations mode ──────────────────────────────────────
+   Set by AnimationController when settings.animationsEnabled is false.
+   Suppresses all CSS transitions, animations, and the card flip. */
+html[data-no-animations] *,
+html[data-no-animations] *::before,
+html[data-no-animations] *::after {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  transition-duration: 0.001ms !important;
+  transition-delay: 0ms !important;
+}
+html[data-no-animations] .card-inner {
+  transition: none !important;
+}
+html[data-no-animations] .stagger-children > * {
+  opacity: 1 !important;
+  animation: none !important;
+}

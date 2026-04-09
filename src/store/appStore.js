@@ -333,15 +333,14 @@ export function applyTheme(name, customVars) {
   updateFavicon(vars['--accent-primary'] || '#7c6af0', vars['--bg-surface'] || '#12122a')
 }
 
-// Default quick-add field suggestions shown in Blueprint page
+// Default quick-add field suggestions shown in Blueprint page.
+// These are language-neutral — suitable for any target language.
 export const DEFAULT_QUICK_ADD = [
-  { key: 'reading',    label: 'Reading / Phonetic',   description: 'The pronunciation guide for the word',                                        field_type: 'text',    show_on_front: true,  phonetics: { ruby: 'none', extras: [] } },
-  { key: 'japanese',   label: 'Japanese',              description: 'The Japanese equivalent or translation',                                      field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
-  { key: 'chinese',    label: 'Chinese (Simplified)',  description: 'The Chinese Simplified equivalent or translation',                            field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
-  { key: 'hanja',      label: 'Hanja',                 description: 'The Hanja (Chinese characters) form',                                        field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
-  { key: 'example',   label: 'Example Sentence',       description: 'A natural sentence using the word. Wrap ONLY the target word with {{word}}.', field_type: 'example', show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
-  { key: 'definition', label: 'Definition',            description: 'A brief English definition',                                                  field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
-  { key: 'notes',      label: 'Notes',                 description: 'Grammar notes, register, or usage tips',                                     field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'reading',     label: 'Reading / Phonetic', description: 'Pronunciation guide or romanisation for the word',                                     field_type: 'text',    show_on_front: true,  phonetics: { ruby: 'none', extras: [] } },
+  { key: 'example',    label: 'Example Sentence',    description: 'A natural example sentence using the word. Wrap ONLY the target word with {{word}}.', field_type: 'example', show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'definition', label: 'Definition',          description: 'A brief definition in the source language',                                            field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'notes',      label: 'Notes',               description: 'Grammar notes, register, usage tips, or mnemonics',                                    field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
+  { key: 'etymology',  label: 'Etymology',           description: 'Word origin or root breakdown',                                                        field_type: 'text',    show_on_front: false, phonetics: { ruby: 'none', extras: [] } },
 ]
 
 export const useAppStore = create(
@@ -363,6 +362,7 @@ export const useAppStore = create(
         defaultSourceLanguage: 'English',
         animationsEnabled: true,
         strictAccents: true,
+        strictMode: false,
         quickAddFields: DEFAULT_QUICK_ADD,
       },
       updateSettings: (patch) => set((s) => {

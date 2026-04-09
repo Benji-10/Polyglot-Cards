@@ -49,8 +49,10 @@ export const api = {
   updateCard: (id, data) => fetchWithAuth(`/cards?id=${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteCard: (id) => fetchWithAuth(`/cards?id=${id}`, { method: 'DELETE' }),
   batchCreateCards: (cards) => fetchWithAuth('/cards-batch', { method: 'POST', body: JSON.stringify({ cards }) }),
-  // Merge partial field data into existing cards by word match
+  // Merge partial field data into existing cards (by id for homograph safety, or by word as fallback)
   patchCards: (deckId, patches) => fetchWithAuth('/cards-patch', { method: 'POST', body: JSON.stringify({ deckId, patches }) }),
+  // Remove field keys from all cards in a deck (called when a blueprint field is deleted)
+  deleteCardFields: (deckId, keys) => fetchWithAuth('/cards-field-delete', { method: 'POST', body: JSON.stringify({ deckId, keys }) }),
 
   // SRS / review
   getSRSCards: (deckId) => fetchWithAuth(`/srs?deckId=${deckId}`),

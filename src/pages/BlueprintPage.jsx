@@ -124,6 +124,7 @@ export default function BlueprintPage() {
   const { settings } = useAppStore()
 
   const [fields, setFields] = useState(null)
+  const [importMode, setImportMode] = useState('ai') // 'ai' | 'direct'
   const [importState, setImportState] = useState('idle')
   const [importError, setImportError] = useState(null)
   const [progressMsg, setProgressMsg] = useState('')
@@ -174,156 +175,207 @@ export default function BlueprintPage() {
     if (regenBarRef.current) regenBarRef.current.style.width = `${pct}%`
   }
 
-  // Compute which fields need AI regeneration vs which just need a label/key rename.
-  // Returns { regenFields, renameMap }
-  //   regenFields — fields whose AI output needs to be regenerated
-  //   renameMap   — { oldKey → newKey } for fields where only label/key changed
   const computeFieldChanges = (oldFields, newFields) => {
     const regenFields = []
-    const renameMap = {}
 
     for (const nf of newFields) {
       const of_ = oldFields.find(f => f.key === nf.key)
 
       if (!of_) {
-        // Brand new field — always needs AI
         regenFields.push(nf)
         continue
       }
 
-      // Check what changed
-      const descChanged  = of_.description !== nf.description
-      const typeChanged  = of_.field_type  !== nf.field_type
-      const phonChanged  = JSON.stringify(of_.phonetics) !== JSON.stringify(nf.phonetics)
-      const labelChanged = of_.label !== nf.label
-      const keyChanged   = of_.key   !== nf.key  // shouldn't happen (key is identity) but guard it
+      const descChanged = of_.description !== nf.description
+      const typeChanged = of_.field_type  !== nf.field_type
 
-      if (descChanged || typeChanged || phonChanged) {
-        // AI output is affected — regenerate regardless of whether cards already have data
-        regenFields.push(nf)
-      } else if (labelChanged) {
-        // Only label changed — no regen needed, just log for display
-        // (blueprint.js already saves the new label to the DB on save)
-      }
+      const oldPh = normalisePhonetics(of_.phonetics)
+      const newPh = normalisePhonetics(nf.phonetics)
+      const rubyAdded   = newPh.ruby !== 'none' && newPh.ruby !== oldPh.ruby
+      const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
+      const phonNeedsRegen = rubyAdded || extrasAdded
+
+      if (descChanged || typeChanged || phonNeedsRegen) regenFields.push(nf)
     }
 
-    return { regenFields }
+    // Keys that existed before but are gone now — their data should be purged from cards
+    const newKeys = new Set(newFields.map(f => f.key))
+    const deletedKeys = oldFields
+      .filter(f => !MANDATORY_FIELD_KEYS.includes(f.key) && !newKeys.has(f.key))
+      .map(f => f.key)
+
+    return { regenFields, deletedKeys }
   }
 
-  const runBackgroundRegen = async (savedFields, allCards) => {
+  const runBackgroundRegen = async (savedFields, _allCards) => {
     const oldFields = originalBlueprintRef.current || []
-    const { regenFields } = computeFieldChanges(oldFields, savedFields)
+    const { regenFields, deletedKeys } = computeFieldChanges(oldFields, savedFields)
 
-    if (regenFields.length === 0 || allCards.length === 0) {
+    // Delete removed field data from cards first (fire and forget — non-blocking)
+    if (deletedKeys.length > 0) {
+      api.deleteCardFields(deckId, deletedKeys).catch(e => console.error('Field delete error:', e))
+    }
+
+    if (regenFields.length === 0) {
+      if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
       originalBlueprintRef.current = savedFields
       return
     }
 
-    // Batch size scales with number of changed fields
-    // Keep total field×word generations under 250 per batch
-    const MAX_TOTAL = 250
-    const wordsPerBatch = Math.max(1, Math.floor(MAX_TOTAL / regenFields.length))
-    const words = allCards.map(c => c.word)
+    // Fetch fresh cards — don't rely on a potentially stale ref
+    let freshCards
+    try {
+      freshCards = await api.getCards(deckId)
+    } catch (e) {
+      toast.error(`Could not fetch cards for refresh: ${e.message}`)
+      return
+    }
+    if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
+
+    // For each regen field, find all cards missing that field's data.
+    // We regen ALL regen fields in a single Gemini call per batch of cards.
+    // Cards that already have ALL regen fields filled are skipped entirely.
+    const cardsNeedingRegen = freshCards.filter(card =>
+      regenFields.some(f => {
+        const val = card.fields?.[f.key]
+        return !val || val === ''
+      })
+    )
+
+    if (cardsNeedingRegen.length === 0) {
+      if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
+      originalBlueprintRef.current = savedFields
+      return
+    }
+
+    // Batch: aim for ~15 cards per batch (generous — not too many fields × words)
+    const WORDS_PER_BATCH = Math.max(5, Math.min(15, Math.floor(200 / Math.max(regenFields.length, 1))))
     const batches = []
-    for (let i = 0; i < words.length; i += wordsPerBatch) batches.push(words.slice(i, i + wordsPerBatch))
+    for (let i = 0; i < cardsNeedingRegen.length; i += WORDS_PER_BATCH) {
+      batches.push(cardsNeedingRegen.slice(i, i + WORDS_PER_BATCH))
+    }
 
     setRegenState('running')
-    setRegenMsg(`Updating ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} across ${allCards.length} cards…`)
+    setRegenMsg(`Refreshing ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} for ${cardsNeedingRegen.length} card${cardsNeedingRegen.length !== 1 ? 's' : ''}…`)
     updateRegenBar(0)
 
     let totalPatched = 0
     let anyFailed = false
-    const failedBatches = []
+    const failedBatchNums = []
     const targetLang = deckRef.current?.target_language || 'Korean'
 
     for (let i = 0; i < batches.length; i++) {
-      const batchWords = batches[i]
+      const batchCards = batches[i]
+      const batchCeil  = ((i + 1) / batches.length) * 100
+      const batchStart = (i     / batches.length) * 100
+      const startTime  = performance.now()
+      const ESTIMATE   = 10000
 
-      // Animate bar toward this batch ceiling
-      const batchCeil = ((i + 1) / batches.length) * 100
-      const batchStart = (i / batches.length) * 100
-      const startTime = performance.now()
-      const ESTIMATE = 9000
       if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
       const tickRegen = () => {
         const elapsed = performance.now() - startTime
-        const t = Math.min(elapsed / ESTIMATE, 1)
+        const t = Math.min(elapsed / ESTIMATE, 0.9) // cap at 90% — save the last 10% for patch
         updateRegenBar(batchStart + (batchCeil - batchStart) * t)
-        if (t < 1) regenRafRef.current = requestAnimationFrame(tickRegen)
+        if (t < 0.9) regenRafRef.current = requestAnimationFrame(tickRegen)
       }
       regenRafRef.current = requestAnimationFrame(tickRegen)
+      setRegenMsg(`Batch ${i + 1} / ${batches.length} — generating…`)
 
-      let batchSucceeded = false
-      try {
-        const genRes = await api.generateCards(
-          deckId,
-          {
-            vocab: batchWords,
-            targetLanguage: targetLang,
-            sourceLanguage: deckRef.current?.source_language || 'English',
-            contextLanguage: deckRef.current?.context_language || 'target',
-          },
-          regenFields
-        )
+      // Build vocab items: include sense hint for homographs so Gemini generates correctly
+      const vocabItems = batchCards.map(card => {
+        const sense = card.fields?.context || card.fields?.source_translation || ''
+        return sense ? `${card.word} (${sense})` : card.word
+      })
 
-        if (genRes?.cards?.length) {
-          // Build patches — only include fields that Gemini actually returned and aren't error stubs
-          const changedKeys = regenFields.flatMap(f => {
-            const keys = [f.key]
-            const ph = f.phonetics
-            if (ph && !Array.isArray(ph)) {
-              if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
-              ;(ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
-            }
-            return keys
-          })
-
-          const patches = genRes.cards
-            .filter(c => c.word && !c._error)
-            .map(c => {
-              const fields = {}
-              changedKeys.forEach(k => {
-                // Only include the field if Gemini returned a non-empty value
-                if (k in c && k !== 'word' && c[k] !== '') fields[k] = c[k]
-              })
-              return { word: c.word, fields }
-            })
-            .filter(p => Object.keys(p.fields).length > 0)
-
-          if (patches.length > 0) {
-            await api.patchCards(deckId, patches)
-            totalPatched += patches.length
-          }
-          batchSucceeded = true
+      // Exponential backoff retry per batch
+      const MAX_RETRIES = 4
+      let genRes = null
+      let lastErr = null
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+          const delay = 1500 * Math.pow(2, attempt - 1)
+          setRegenMsg(`Batch ${i + 1} / ${batches.length} — retry ${attempt}/${MAX_RETRIES} (${Math.round(delay / 1000)}s)…`)
+          await new Promise(r => setTimeout(r, delay))
         }
-      } catch (e) {
-        console.error(`Regen batch ${i + 1} error:`, e)
-        failedBatches.push(i + 1)
-        anyFailed = true
+        try {
+          genRes = await api.generateCards(
+            deckId,
+            {
+              vocab: vocabItems,
+              targetLanguage: targetLang,
+              sourceLanguage: deckRef.current?.source_language || 'English',
+              contextLanguage: deckRef.current?.context_language || 'target',
+            },
+            regenFields
+          )
+          if (genRes?.cards?.length) { lastErr = null; break }
+          lastErr = new Error('No cards returned')
+        } catch (e) {
+          lastErr = e
+        }
       }
 
       if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
-      updateRegenBar(batchCeil)
-      if (batchSucceeded) {
-        setRegenMsg(`Updated ${totalPatched} cards…`)
-      } else {
+
+      if (lastErr || !genRes?.cards?.length) {
+        console.error(`Regen batch ${i + 1} failed:`, lastErr?.message)
+        failedBatchNums.push(i + 1)
+        anyFailed = true
+        updateRegenBar(batchCeil)
         setRegenMsg(`Batch ${i + 1} failed — continuing…`)
+        continue
       }
+
+      // Build patches — match by position, skip cards with no new data
+      setRegenMsg(`Batch ${i + 1} / ${batches.length} — saving…`)
+      const changedKeys = regenFields.flatMap(f => {
+        const keys = [f.key]
+        const ph = f.phonetics
+        if (ph && !Array.isArray(ph)) {
+          if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
+          ;(ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
+        }
+        return keys
+      })
+
+      const patches = []
+      genRes.cards
+        .filter(c => !c._error)
+        .forEach((genCard, idx) => {
+          const card = batchCards[idx]
+          if (!card) return
+          const fieldData = {}
+          changedKeys.forEach(k => {
+            if (k in genCard && k !== 'word' && genCard[k] !== '') fieldData[k] = genCard[k]
+          })
+          // Validate: must have filled at least one regen field
+          const hasData = regenFields.some(f => fieldData[f.key])
+          if (hasData) patches.push({ id: card.id, word: card.word, fields: fieldData })
+        })
+
+      if (patches.length > 0) {
+        try {
+          await api.patchCards(deckId, patches)
+          totalPatched += patches.length
+        } catch (e) {
+          console.error(`Patch batch ${i + 1} failed:`, e)
+          failedBatchNums.push(i + 1)
+          anyFailed = true
+        }
+      }
+
+      updateRegenBar(batchCeil)
+      setRegenMsg(`${totalPatched} cards updated…`)
     }
 
     qc.invalidateQueries({ queryKey: ['cards', deckId] })
 
     if (anyFailed) {
-      // Keep originalBlueprintRef pointing to oldFields for ONLY the failed fields
-      // so the next save will retry them. Successful fields are committed.
-      // Simplest safe approach: revert entirely so next save retries all changed fields.
       originalBlueprintRef.current = oldFields
       setRegenState('error')
-      const failedStr = failedBatches.join(', ')
-      setRegenMsg(
-        `${totalPatched} cards updated. Batches ${failedStr} failed — save again to retry.`
-      )
-      toast.error(`Card update partially failed (batch${failedBatches.length > 1 ? 'es' : ''} ${failedStr}). Save the blueprint again to retry.`)
+      const failedStr = failedBatchNums.join(', ')
+      setRegenMsg(`${totalPatched} cards updated. Batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedStr} failed — save again to retry.`)
+      toast.error(`Some card updates failed (batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedStr}). Save blueprint again to retry.`)
     } else {
       originalBlueprintRef.current = savedFields
       setRegenState('done')
@@ -362,10 +414,14 @@ export default function BlueprintPage() {
   })
 
   // ── Field management ────────────────────────────────────
+  // Keys are stable identifiers generated once at creation — they never change,
+  // even when the user renames the label.
+  const makeKey = () => `f_${Math.random().toString(36).slice(2, 8)}`
+
   const addField = suggested => {
     const base = suggested
-      ? { ...suggested, phonetics: normalisePhonetics(suggested.phonetics) }
-      : { key: `field_${Date.now()}`, label: 'New Field', description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] } }
+      ? { ...suggested, key: suggested.key || makeKey(), phonetics: normalisePhonetics(suggested.phonetics) }
+      : { key: makeKey(), label: 'New Field', description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] } }
     setFields(prev => [...prev, { ...base, position: prev.length }])
   }
 
@@ -386,7 +442,7 @@ export default function BlueprintPage() {
   const deckRef = useRef(deck)
   useEffect(() => { deckRef.current = deck }, [deck])
 
-  // ── CSV Import ──────────────────────────────────────────
+  // ── CSV Import (AI) ──────────────────────────────────────
   const handleCSV = useCallback(file => {
     setImportState('generating')
     setImportError(null)
@@ -401,17 +457,25 @@ export default function BlueprintPage() {
           const batches = []
           for (let i = 0; i < vocab.length; i += BATCH_SIZE) batches.push(vocab.slice(i, i + BATCH_SIZE))
           progress.reset(batches.length)
-          setProgressMsg(`0 / ${batches.length} batches`)
+          setProgressMsg(`Starting — ${batches.length} batch${batches.length !== 1 ? 'es' : ''}`)
 
           let allGeneratedCards = []
-          for (let i = 0; i < batches.length; i++) {
-            setProgressMsg(`Batch ${i + 1} / ${batches.length}`)
-            progress.startBatch(i)
+          let failedBatches = 0
 
-            // Retry each batch up to 3 times before giving up
+          for (let i = 0; i < batches.length; i++) {
+            progress.startBatch(i)
+            setProgressMsg(`Batch ${i + 1} / ${batches.length}`)
+
+            // Exponential backoff retry per batch
             let genRes = null
             let lastErr = null
-            for (let attempt = 0; attempt < 3; attempt++) {
+            const MAX_RETRIES = 4
+            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+              if (attempt > 0) {
+                const delay = 1500 * Math.pow(2, attempt - 1)
+                setProgressMsg(`Batch ${i + 1} / ${batches.length} — retry ${attempt}/${MAX_RETRIES} (${Math.round(delay / 1000)}s)…`)
+                await new Promise(r => setTimeout(r, delay))
+              }
               try {
                 genRes = await api.generateCards(
                   deckId,
@@ -423,37 +487,46 @@ export default function BlueprintPage() {
                   },
                   fieldsRef.current || []
                 )
-                lastErr = null
-                break
+                if (genRes?.cards?.length) { lastErr = null; break }
+                lastErr = new Error('No cards returned from API')
               } catch (e) {
                 lastErr = e
-                if (attempt < 2) {
-                  setProgressMsg(`Batch ${i + 1} / ${batches.length} — retrying (${attempt + 1}/3)…`)
-                  await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
-                }
               }
             }
 
             if (lastErr || !genRes?.cards?.length) {
               const msg = lastErr?.message || 'No cards returned'
               toast.error(`Batch ${i + 1} failed: ${msg}`)
-              setProgressMsg(`Batch ${i + 1} / ${batches.length} — failed, continuing…`)
+              setProgressMsg(`Batch ${i + 1} / ${batches.length} — failed`)
               progress.completeBatch(i)
+              failedBatches++
               continue
             }
 
+            // Validate cards — filter out error stubs and cards missing ALL blueprint fields
+            const requiredKeys = (fieldsRef.current || []).map(f => f.key).filter(k => !MANDATORY_FIELD_KEYS.includes(k))
+            const validCards = genRes.cards.filter(c => {
+              if (c._error || !c.word) return false
+              // Keep card if at least one non-mandatory blueprint field has a value
+              if (requiredKeys.length === 0) return true
+              return requiredKeys.some(k => c[k] && c[k] !== '')
+            })
+
             progress.completeBatch(i)
-            allGeneratedCards.push(...genRes.cards.filter(c => !c._error))
-            setProgressMsg(`Batch ${i + 1} / ${batches.length} — ${allGeneratedCards.length} cards generated`)
+            allGeneratedCards.push(...validCards)
+            setProgressMsg(`Batch ${i + 1} / ${batches.length} — ${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated`)
           }
 
           if (!allGeneratedCards.length) {
-            setImportState('done')
+            setImportError(failedBatches > 0 ? `All ${failedBatches} batch${failedBatches !== 1 ? 'es' : ''} failed — check your connection and try again` : 'No valid cards generated')
+            setImportState('error')
             return
           }
 
+          // ── Saving phase ─────────────────────────────────────
+          setProgressMsg(`Saving ${allGeneratedCards.length} cards…`)
+
           // ── Detect homographs ──────────────────────────────
-          // Group cards by word. Any word with multiple cards (multiple meanings) is a homograph.
           const wordGroups = {}
           for (const card of allGeneratedCards) {
             if (!wordGroups[card.word]) wordGroups[card.word] = []
@@ -469,15 +542,49 @@ export default function BlueprintPage() {
 
           // Function that detects collisions then saves
           const proceedToCollisionCheck = async (cardsToSave) => {
-            // Find cards whose word already exists in this deck
+            // Build word → array of existing cards (a word can have multiple for homographs)
             const existingByWord = {}
-            for (const c of allCardsRef.current) existingByWord[c.word] = c
+            for (const c of allCardsRef.current) {
+              if (!existingByWord[c.word]) existingByWord[c.word] = []
+              existingByWord[c.word].push(c)
+            }
 
-            const collisions = cardsToSave
-              .map(c => ({ incoming: c, existing: existingByWord[c.word] }))
-              .filter(({ existing }) => existing)
+            // For each incoming card, find the best matching existing card.
+            // Match by _sense if available (context/source_translation field), then by index.
+            const usedExistingIds = new Set()
+            const collisions = []
+            const noCollision = []
 
-            const noCollision = cardsToSave.filter(c => !existingByWord[c.word])
+            for (const incoming of cardsToSave) {
+              const existingArr = existingByWord[incoming.word]
+              if (!existingArr || existingArr.length === 0) {
+                noCollision.push(incoming)
+                continue
+              }
+
+              // Try to match by sense (context or source_translation field)
+              const incomingSense = (incoming._sense || incoming.source_translation || '').toLowerCase().trim()
+              let match = null
+
+              if (incomingSense) {
+                match = existingArr.find(e => {
+                  if (usedExistingIds.has(e.id)) return false
+                  const eSense = (e.fields?.context || e.fields?.source_translation || '').toLowerCase().trim()
+                  return eSense === incomingSense || eSense.includes(incomingSense) || incomingSense.includes(eSense)
+                })
+              }
+
+              // Fall back to first unmatched existing card
+              if (!match) match = existingArr.find(e => !usedExistingIds.has(e.id))
+
+              if (match) {
+                usedExistingIds.add(match.id)
+                collisions.push({ incoming, existing: match })
+              } else {
+                // All existing cards for this word are already matched — this is a new sense
+                noCollision.push(incoming)
+              }
+            }
 
             if (collisions.length === 0) {
               await saveCards(noCollision)
@@ -488,22 +595,21 @@ export default function BlueprintPage() {
                 noCollision,
                 blueprint: fieldsRef.current || [],
                 onConfirm: async (decisions) => {
-                  // decisions: [{ incoming, action: 'add'|'update'|'skip' }]
                   setCollisionPending(null)
                   setImportState('generating')
 
-                  const toAdd    = [...noCollision]
+                  const toAdd = [...noCollision]
                   const toUpdate = []
-                  for (const { incoming, action } of decisions) {
+                  for (const { incoming, existing, action } of decisions) {
                     if (action === 'add')    toAdd.push(incoming)
-                    if (action === 'update') toUpdate.push(incoming)
+                    if (action === 'update') toUpdate.push({ incoming, existing })
                   }
 
-                  // Patch existing cards with updated fields
                   if (toUpdate.length) {
-                    const patches = toUpdate.map(c => {
-                      const { _meanings, _sense, _error, word, ...fields } = c
-                      return { word, fields }
+                    // Patch by id — correct for homographs
+                    const patches = toUpdate.map(({ incoming, existing }) => {
+                      const { _meanings, _sense, _error, word, ...fields } = incoming
+                      return { id: existing.id, word, fields }
                     })
                     await api.patchCards(deckId, patches).catch(() => {})
                   }
@@ -555,6 +661,158 @@ export default function BlueprintPage() {
   }, [deckId, progress]) // eslint-disable-line
 
   const handleDrop = useCallback(e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSV(f) }, [handleCSV])
+
+  // ── Direct CSV import (no AI) ───────────────────────────
+  // Row 1: headers — word, [field keys], optional SRS columns
+  // Row 2: metadata JSON per field column (label, description, field_type, show_on_front, phonetics)
+  //        — only present in files exported from this app
+  // Row 3+: card data
+  const handleDirectCSV = useCallback(file => {
+    setImportState('generating')
+    setImportError(null)
+    setTotalImported(0)
+
+    Papa.parse(file, {
+      header: false,       // parse raw rows so we can handle the metadata row ourselves
+      skipEmptyLines: true,
+      complete: async res => {
+        try {
+          const allRows = res.data
+          if (allRows.length < 2) { setImportError('CSV needs at least a header and one data row'); setImportState('error'); return }
+
+          const headers = allRows[0].map(h => String(h).trim())
+          if (!headers.includes('word')) { setImportError('CSV must have a "word" column'); setImportState('error'); return }
+
+          const SRS_COLS = new Set(['srs_state', 'last_reviewed', 'interval', 'stability', 'difficulty', 'repetitions', 'seen'])
+
+          // Detect metadata row: row 2 where at least one blueprint field column contains JSON with "label"
+          let metaRow = null
+          let dataStartIdx = 1
+          const row2 = allRows[1]
+          const hasMeta = row2.some((cell, i) => {
+            if (!cell || headers[i] === 'word' || SRS_COLS.has(headers[i])) return false
+            try { const p = JSON.parse(cell); return typeof p === 'object' && 'label' in p } catch { return false }
+          })
+          if (hasMeta) { metaRow = row2; dataStartIdx = 2 }
+
+          const fieldCols = headers.filter(h => h !== 'word' && !SRS_COLS.has(h))
+
+          // If we have a metadata row, update the blueprint with the imported field definitions
+          if (metaRow) {
+            const newFields = []
+            for (let i = 0; i < headers.length; i++) {
+              const h = headers[i]
+              if (h === 'word' || SRS_COLS.has(h) || MANDATORY_FIELD_KEYS.includes(h)) continue
+              try {
+                const meta = JSON.parse(metaRow[i] || '{}')
+                newFields.push({
+                  key:           h,
+                  label:         meta.label        || h,
+                  description:   meta.description  || '',
+                  field_type:    meta.field_type   || 'text',
+                  show_on_front: meta.show_on_front || false,
+                  phonetics:     normalisePhonetics(meta.phonetics),
+                  position:      newFields.length,
+                })
+              } catch {
+                newFields.push({ key: h, label: h, description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] }, position: newFields.length })
+              }
+            }
+            if (newFields.length > 0) {
+              // Keep mandatory fields, prepend them, save blueprint
+              const mandatory = (fieldsRef.current || []).filter(f => MANDATORY_FIELD_KEYS.includes(f.key))
+              const merged = [...mandatory, ...newFields]
+              try {
+                await api.saveBlueprintFields(deckId, merged)
+                qc.invalidateQueries({ queryKey: ['blueprint', deckId] })
+                setFields(merged.map(f => ({ ...f, phonetics: normalisePhonetics(f.phonetics) })))
+                originalBlueprintRef.current = merged
+              } catch (e) {
+                console.error('Blueprint update failed:', e)
+              }
+            }
+          }
+
+          // Parse data rows into cards
+          const wordIdx = headers.indexOf('word')
+          const colIdx  = (col) => headers.indexOf(col)
+          const cardsToSave = allRows.slice(dataStartIdx)
+            .filter(row => row[wordIdx]?.trim())
+            .map(row => {
+              const card = { deck_id: deckId, word: row[wordIdx].trim(), fields: {} }
+              for (const col of fieldCols) {
+                const idx = colIdx(col)
+                if (idx >= 0 && row[idx] !== undefined && row[idx] !== '') card.fields[col] = row[idx]
+              }
+              if (row[colIdx('srs_state')])     card.srs_state     = row[colIdx('srs_state')]
+              if (row[colIdx('last_reviewed')]) card.last_reviewed  = row[colIdx('last_reviewed')]
+              if (row[colIdx('interval')])      card.interval       = Number(row[colIdx('interval')]) || 0
+              if (row[colIdx('stability')])     card.stability      = Number(row[colIdx('stability')]) || 0
+              if (row[colIdx('difficulty')])    card.difficulty     = Number(row[colIdx('difficulty')]) || 5
+              if (row[colIdx('repetitions')])   card.repetitions    = Number(row[colIdx('repetitions')]) || 0
+              return card
+            })
+
+          if (!cardsToSave.length) { setImportError('No valid data rows found'); setImportState('error'); return }
+
+          // Collision check — word → array to handle homographs
+          const existingByWord = {}
+          for (const c of allCardsRef.current) {
+            if (!existingByWord[c.word]) existingByWord[c.word] = []
+            existingByWord[c.word].push(c)
+          }
+          const usedIds = new Set()
+          const collisions = []
+          const noCollision = []
+          for (const incoming of cardsToSave) {
+            const arr = existingByWord[incoming.word]
+            if (!arr?.length) { noCollision.push(incoming); continue }
+            const match = arr.find(e => !usedIds.has(e.id))
+            if (match) { usedIds.add(match.id); collisions.push({ incoming, existing: match }) }
+            else noCollision.push(incoming)
+          }
+
+          const saveDirect = async (toAdd, toUpdate) => {
+            if (toUpdate.length) {
+              const patches = toUpdate.map(({ incoming, existing }) => ({
+                id: existing.id, word: incoming.word, fields: incoming.fields,
+              }))
+              await api.patchCards(deckId, patches).catch(() => {})
+            }
+            if (toAdd.length) {
+              await batchSaveMutation.mutateAsync(toAdd)
+              setTotalImported(toAdd.length)
+            }
+            qc.invalidateQueries({ queryKey: ['cards', deckId] })
+            setImportState('done')
+          }
+
+          if (collisions.length === 0) {
+            await saveDirect(cardsToSave, [])
+          } else {
+            setImportState('review')
+            setCollisionPending({
+              collisions,
+              noCollision,
+              blueprint: fieldsRef.current || [],
+              onConfirm: async (decisions) => {
+                setCollisionPending(null)
+                setImportState('generating')
+                const toAdd = [...noCollision]
+                const toUpdate = []
+                for (const { incoming, existing, action } of decisions) {
+                  if (action === 'add')    toAdd.push(incoming)
+                  if (action === 'update') toUpdate.push({ incoming, existing })
+                }
+                await saveDirect(toAdd, toUpdate)
+              },
+            })
+          }
+        } catch (e) { setImportError(e.message); setImportState('error') }
+      },
+      error: e => { setImportError(e.message); setImportState('error') },
+    })
+  }, [deckId, batchSaveMutation, qc]) // eslint-disable-line
 
   if (blueprintLoading || fields === null) {
     return (
@@ -658,64 +916,93 @@ export default function BlueprintPage() {
       {/* ── Import ─────────────────────────────────────── */}
       <section className="mb-10">
         <h2 className="font-display font-semibold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>Import Vocabulary</h2>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
-          CSV with one word per cell. One request per batch of {BATCH_SIZE} — no timeouts. Save blueprint first.
-        </p>
 
-        {importState === 'idle' || importState === 'error' ? (
-          <label onDrop={handleDrop} onDragOver={e => e.preventDefault()}
-            className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
-            style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
-            <span className="text-4xl">📄</span>
-            <div className="text-center">
-              <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>Drop CSV here or click to browse</div>
-              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>One word per cell — any column layout</div>
+        {/* Mode tabs */}
+        <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: 'var(--bg-elevated)' }}>
+          {[['ai', '✨ AI (fill fields)'], ['direct', '📋 Direct CSV']].map(([v, l]) => (
+            <button key={v}
+              className="text-xs px-3 py-1.5 rounded-lg transition-all font-medium"
+              style={{
+                background: importMode === v ? 'var(--bg-card)' : 'transparent',
+                color: importMode === v ? 'var(--text-primary)' : 'var(--text-muted)',
+                boxShadow: importMode === v ? 'var(--shadow-card)' : 'none',
+              }}
+              onClick={() => { setImportMode(v); setImportState('idle'); setImportError(null) }}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {importMode === 'ai' && (
+          <>
+            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+              Drop a CSV with one word per cell — Gemini fills all blueprint fields in batches of {BATCH_SIZE}.
+            </p>
+            {importState === 'idle' || importState === 'error' ? (
+              <label onDrop={handleDrop} onDragOver={e => e.preventDefault()}
+                className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
+                style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
+                <span className="text-4xl">📄</span>
+                <div className="text-center">
+                  <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>Drop CSV here or click to browse</div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>One word per cell — any column layout</div>
+                </div>
+                {importError && (
+                  <div className="text-xs px-3 py-2 rounded-lg w-full text-center"
+                    style={{ background: 'rgba(225,112,85,0.1)', color: 'var(--accent-danger)', border: '1px solid rgba(225,112,85,.2)' }}>
+                    ✕ {importError}
+                  </div>
+                )}
+                <input type="file" accept=".csv,.txt" className="hidden" onChange={e => e.target.files[0] && handleCSV(e.target.files[0])} />
+              </label>
+            ) : importState === 'done' ? (
+              <ImportDone totalImported={totalImported} onReset={() => { setImportState('idle'); setTotalImported(0); progress.reset(1) }} />
+            ) : importState === 'review' ? (
+              <ImportReviewing />
+            ) : (
+              <ImportProgress progressMsg={progressMsg} totalImported={totalImported} displayPct={progress.displayPct} barRef={progress.barRef} />
+            )}
+          </>
+        )}
+
+        {importMode === 'direct' && (
+          <>
+            <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+              CSV with headers matching blueprint field keys. First column must be <code className="font-mono">word</code>.
+              Optional SRS columns: <code className="font-mono">srs_state</code>, <code className="font-mono">last_reviewed</code>, <code className="font-mono">interval</code>.
+            </p>
+            <div className="text-xs mb-4 px-3 py-2 rounded-lg font-mono overflow-x-auto"
+              style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+              word,{fields.filter(f => !MANDATORY_FIELD_KEYS.includes(f.key)).map(f => f.key).join(',')}
             </div>
-            {importError && (
-              <div className="text-xs px-3 py-2 rounded-lg w-full text-center"
-                style={{ background: 'rgba(225,112,85,0.1)', color: 'var(--accent-danger)', border: '1px solid rgba(225,112,85,.2)' }}>
-                ✕ {importError}
+            {importState === 'idle' || importState === 'error' ? (
+              <label onDrop={e => { e.preventDefault(); e.dataTransfer.files[0] && handleDirectCSV(e.dataTransfer.files[0]) }}
+                onDragOver={e => e.preventDefault()}
+                className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
+                style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
+                <span className="text-4xl">📋</span>
+                <div className="text-center">
+                  <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>Drop structured CSV or click to browse</div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Headers must match field keys shown above</div>
+                </div>
+                {importError && (
+                  <div className="text-xs px-3 py-2 rounded-lg w-full text-center"
+                    style={{ background: 'rgba(225,112,85,0.1)', color: 'var(--accent-danger)', border: '1px solid rgba(225,112,85,.2)' }}>
+                    ✕ {importError}
+                  </div>
+                )}
+                <input type="file" accept=".csv,.txt" className="hidden" onChange={e => e.target.files[0] && handleDirectCSV(e.target.files[0])} />
+              </label>
+            ) : importState === 'done' ? (
+              <ImportDone totalImported={totalImported} onReset={() => { setImportState('idle'); setTotalImported(0) }} />
+            ) : importState === 'review' ? (
+              <ImportReviewing />
+            ) : (
+              <div className="card p-6 text-center">
+                <div className="text-sm animate-pulse" style={{ color: 'var(--text-muted)' }}>Saving cards…</div>
               </div>
             )}
-            <input type="file" accept=".csv,.txt" className="hidden" onChange={e => e.target.files[0] && handleCSV(e.target.files[0])} />
-          </label>
-        ) : importState === 'done' ? (
-          <div className="card p-6 text-center">
-            <div className="text-4xl mb-3">✅</div>
-            <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
-            <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{totalImported} card{totalImported !== 1 ? 's' : ''} added.</div>
-            <button className="btn-secondary mt-4 text-xs"
-              onClick={() => { setImportState('idle'); setTotalImported(0); progress.reset(1) }}>
-              Import more
-            </button>
-          </div>
-        ) : importState === 'review' ? (
-          <div className="card p-6 text-center">
-            <div className="text-4xl mb-3">🔍</div>
-            <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Reviewing homographs…</div>
-            <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Check the popup to confirm which meanings to import.</div>
-          </div>
-        ) : (
-          <div className="card p-6">
-            <div className="flex items-center gap-3 mb-3">
-              <span className="text-xl flex-shrink-0" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>✨</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium mb-0.5" style={{ color: 'var(--text-primary)' }}>{progressMsg || 'Generating...'}</div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {totalImported > 0 ? `${totalImported} cards saved so far` : 'Starting first batch...'}
-                </div>
-              </div>
-              <div className="text-sm font-mono tabular-nums flex-shrink-0" style={{ color: 'var(--accent-primary)' }}>
-                {progress.displayPct}%
-              </div>
-            </div>
-            <div className="progress-bar">
-              <div ref={progress.barRef} className="import-progress-fill" style={{ width: '0%' }} />
-            </div>
-            <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-              Estimated time adapts based on completed batches
-            </div>
-          </div>
+          </>
         )}
       </section>
 
@@ -749,6 +1036,69 @@ export default function BlueprintPage() {
   )
 }
 
+// ── Shared import status sub-components ────────────────────
+function ImportDone({ totalImported, onReset }) {
+  return (
+    <div className="card p-6 text-center">
+      <div className="text-4xl mb-3">✅</div>
+      <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
+      <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{totalImported} card{totalImported !== 1 ? 's' : ''} added.</div>
+      <button className="btn-secondary mt-4 text-xs" onClick={onReset}>Import more</button>
+    </div>
+  )
+}
+
+function ImportReviewing() {
+  return (
+    <div className="card p-6 text-center">
+      <div className="text-4xl mb-3">🔍</div>
+      <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Reviewing…</div>
+      <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Check the popup to confirm which cards to import.</div>
+    </div>
+  )
+}
+
+function ImportProgress({ progressMsg, totalImported, displayPct, barRef }) {
+  const isSaving   = progressMsg?.includes('Saving')
+  const isRetrying = progressMsg?.includes('retry')
+  const icon       = isSaving ? '💾' : isRetrying ? '🔄' : '✨'
+  const barColor   = isRetrying
+    ? 'linear-gradient(90deg, #fdcb6e, #e17055)'
+    : isSaving
+      ? 'linear-gradient(90deg, var(--accent-secondary), var(--accent-primary))'
+      : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
+
+  return (
+    <div className="card p-6">
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-xl flex-shrink-0" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>{icon}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium mb-0.5" style={{ color: 'var(--text-primary)' }}>{progressMsg || 'Generating…'}</div>
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {isSaving
+              ? 'Checking for duplicates and saving…'
+              : totalImported > 0
+                ? `${totalImported} card${totalImported !== 1 ? 's' : ''} ready`
+                : 'Estimated time adapts per batch'}
+          </div>
+        </div>
+        <div className="text-sm font-mono tabular-nums flex-shrink-0"
+          style={{ color: isRetrying ? 'var(--accent-danger)' : 'var(--accent-primary)' }}>
+          {displayPct}%
+        </div>
+      </div>
+      <div className="progress-bar">
+        <div ref={barRef} className="import-progress-fill" style={{ width: '0%', background: barColor }} />
+      </div>
+      {isRetrying && (
+        <div className="text-xs mt-2" style={{ color: '#fdcb6e' }}>
+          Retrying with exponential backoff — this batch will be re-attempted automatically
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Keys that are mandatory — always present, cannot be deleted
 export const MANDATORY_FIELD_KEYS = ['source_translation', 'context']
 
@@ -765,9 +1115,9 @@ const MANDATORY_DEFAULTS = {
   context: {
     key: 'context',
     label: 'Context',
-    description: 'Grammatical or usage context shown on the card front to disambiguate — e.g. "(masculine singular)", "(verb, informal)", "(pl.)". Leave empty if not needed.',
+    description: 'Grammatical or usage context to disambiguate — e.g. "(masculine singular)", "(verb, informal)", "(pl.)". Shown on card front in Target→Source mode. Leave empty if not needed.',
     field_type: 'text',
-    show_on_front: true,
+    show_on_front: false,
     phonetics: { ruby: 'none', extras: [] },
   },
 }
@@ -859,11 +1209,7 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <input className="input text-sm py-1.5 flex-1 min-w-32" value={field.label}
-              onChange={e => {
-                const label = e.target.value
-                const key = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'field'
-                onUpdate({ label, key })
-              }} placeholder="Label" />
+              onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
             <select className="input text-xs py-1.5 w-36" value={field.field_type}
               onChange={e => onUpdate({ field_type: e.target.value })}>
               {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -1094,8 +1440,9 @@ const COLLISION_ACTIONS = [
 ]
 
 function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
+  // Store { incoming, existing, action } so onConfirm has the existing card id
   const [decisions, setDecisions] = useState(() =>
-    collisions.map(({ incoming }) => ({ incoming, action: 'update' }))
+    collisions.map(({ incoming, existing }) => ({ incoming, existing, action: 'update' }))
   )
 
   const setAction = (idx, action) =>

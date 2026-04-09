@@ -92,6 +92,19 @@ function CloudSettingsSync() {
   return null
 }
 
+// Applies/removes data-no-animations on <html> so CSS can suppress all transitions
+function AnimationController() {
+  const { settings } = useAppStore()
+  useEffect(() => {
+    if (settings.animationsEnabled === false) {
+      document.documentElement.setAttribute('data-no-animations', '')
+    } else {
+      document.documentElement.removeAttribute('data-no-animations')
+    }
+  }, [settings.animationsEnabled])
+  return null
+}
+
 export default function App() {
   const { user, loading, getToken } = useAuth()
 
@@ -106,6 +119,7 @@ export default function App() {
     <ToastProvider>
       <OfflineWatcher />
       <CloudSettingsSync />
+      <AnimationController />
       <Routes>
         <Route path="/" element={<AppShell />}>
           <Route index element={<DeckSelect />} />
