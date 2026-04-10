@@ -250,8 +250,9 @@ export default function BlueprintPage() {
     if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
 
     // Only regen cards that are actually missing at least one regen field
+    const fieldEmpty = v => !v || v === '' || (typeof v === 'object' && !v.text)
     const cardsNeedingRegen = freshCards.filter(card =>
-      regenFields.some(f => { const v = card.fields?.[f.key]; return !v || v === '' })
+      regenFields.some(f => fieldEmpty(card.fields?.[f.key]))
     )
     if (cardsNeedingRegen.length === 0) {
       if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
@@ -308,24 +309,21 @@ export default function BlueprintPage() {
         return
       }
 
-      const changedKeys = regenFields.flatMap(f => {
-        const keys = [f.key]
-        const ph = f.phonetics
-        if (ph && !Array.isArray(ph)) {
-          if (ph.ruby && ph.ruby !== 'none') keys.push(`${f.key}_${ph.ruby}`)
-          ;(ph.extras || []).forEach(k => keys.push(`${f.key}_${k}`))
-        }
-        return keys
-      })
+      // With the nested annotation shape, Gemini returns each field as either:
+      //   - a plain string (source_translation, context, unannotated fields)
+      //   - an object { text, annotationType, ... } (annotated/example fields)
+      // We patch by field key — the deep-merge in cards-patch handles nested merging.
+      const changedFieldKeys = regenFields.map(f => f.key)
 
       genRes.cards.filter(c => !c._error).forEach((genCard, idx) => {
         const card = batchCards[idx]
         if (!card) return
         const fieldData = {}
-        changedKeys.forEach(k => {
-          if (k in genCard && k !== 'word' && genCard[k] !== '') fieldData[k] = genCard[k]
+        changedFieldKeys.forEach(k => {
+          const v = genCard[k]
+          if (v !== undefined && v !== null && v !== '') fieldData[k] = v
         })
-        if (regenFields.some(f => fieldData[f.key])) {
+        if (regenFields.some(f => fieldData[f.key] != null)) {
           allPatches.push({ id: card.id, word: card.word, fields: fieldData })
         }
       })
@@ -650,9 +648,9 @@ export default function BlueprintPage() {
           // Function that actually saves the chosen cards
           const saveCards = async (cardsToSave) => {
             const toSave = cardsToSave.map(c => {
-              // Strip internal _ fields before saving
-              const { _meanings, _sense, _error, ...fields } = c
-              return { deck_id: deckId, word: c.word, fields }
+              // Strip internal meta fields — everything else is card field data
+              const { _meanings, _sense, _error, word, ...fields } = c
+              return { deck_id: deckId, word, fields }
             })
             if (toSave.length) {
               await batchSaveMutation.mutateAsync(toSave)
@@ -769,7 +767,16 @@ export default function BlueprintPage() {
               const card = { deck_id: deckId, word: row[wordIdx].trim(), fields: {} }
               for (const col of fieldCols) {
                 const idx = colIdx(col)
-                if (idx >= 0 && row[idx] !== undefined && row[idx] !== '') card.fields[col] = row[idx]
+                if (idx >= 0 && row[idx] !== undefined && row[idx] !== '') {
+                  const raw = row[idx]
+                  // Field values that are objects were exported as JSON — try to parse them back
+                  try {
+                    const parsed = JSON.parse(raw)
+                    card.fields[col] = (parsed && typeof parsed === 'object') ? parsed : raw
+                  } catch {
+                    card.fields[col] = raw
+                  }
+                }
               }
               if (row[colIdx('srs_state')])     card.srs_state     = row[colIdx('srs_state')]
               if (row[colIdx('last_reviewed')]) card.last_reviewed  = row[colIdx('last_reviewed')]
@@ -1309,15 +1316,42 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
 // ── ManualCardForm ──────────────────────────────────────────
 function ManualCardForm({ deckId, fields, onSaved }) {
   const [word, setWord] = useState('')
+  // fieldValues stores { fieldKey: string } — always plain text per input
   const [fieldValues, setFieldValues] = useState({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+
+  const getAnnotationKeys = (ph) => {
+    if (!ph) return []
+    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+    const keys = []
+    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+    return keys
+  }
 
   const handleSave = async () => {
     if (!word.trim()) return
     setSaving(true)
     try {
-      await api.createCard({ deck_id: deckId, word: word.trim(), fields: fieldValues })
+      // Wrap annotated field values as objects: { text, annotationType? }
+      const builtFields = {}
+      for (const f of fields) {
+        const text = fieldValues[f.key] || ''
+        if (!text) continue
+        const annotationKeys = getAnnotationKeys(f.phonetics)
+        if (annotationKeys.length === 0) {
+          builtFields[f.key] = text
+        } else {
+          const obj = { text }
+          for (const ak of annotationKeys) {
+            const v = fieldValues[`${f.key}__${ak}`] || ''
+            if (v) obj[ak] = v
+          }
+          builtFields[f.key] = obj
+        }
+      }
+      await api.createCard({ deck_id: deckId, word: word.trim(), fields: builtFields })
       setWord(''); setFieldValues({}); setSaved(true); onSaved()
       setTimeout(() => setSaved(false), 2000)
     } catch (e) { alert(e.message) } finally { setSaving(false) }
@@ -1331,27 +1365,50 @@ function ManualCardForm({ deckId, fields, onSaved }) {
           onKeyDown={e => e.key === 'Enter' && handleSave()}
           placeholder="Enter the target language word" autoComplete="off" />
       </div>
-      {fields.map(f => (
-        <div key={f.key}>
-          <label className="section-title block mb-1.5">
-            {f.label}
-            {f.field_type === 'example' && (
-              <span className="ml-2 normal-case font-normal" style={{ color: 'var(--text-muted)' }}>
-                — use {'{{word}}'} to mark cloze
-              </span>
+      {fields.map(f => {
+        const annotationKeys = getAnnotationKeys(f.phonetics)
+        return (
+          <div key={f.key}>
+            <label className="section-title block mb-1.5">
+              {f.label}
+              {f.field_type === 'example' && (
+                <span className="ml-2 normal-case font-normal" style={{ color: 'var(--text-muted)' }}>
+                  — use {'{{word}}'} to mark cloze
+                </span>
+              )}
+            </label>
+            {f.field_type === 'example' ? (
+              <>
+                <textarea className="input text-sm resize-none" rows={2} value={fieldValues[f.key] || ''}
+                  onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
+                  placeholder="e.g. She {{loves}} him. ;;; Their {{love}} is eternal." />
+                {annotationKeys.map(ak => (
+                  <div key={ak} className="mt-1.5">
+                    <label className="section-title block mb-1">{ak}</label>
+                    <textarea className="input text-xs resize-none" rows={2}
+                      value={fieldValues[`${f.key}__${ak}`] || ''}
+                      onChange={e => setFieldValues(v => ({ ...v, [`${f.key}__${ak}`]: e.target.value }))}
+                      placeholder={`${ak} — same order, separated by  ;;; `} />
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                <input className="input text-sm" value={fieldValues[f.key] || ''}
+                  onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
+                  placeholder={f.description || f.label} />
+                {annotationKeys.map(ak => (
+                  <div key={ak} className="mt-1.5">
+                    <label className="section-title block mb-1">{ak}</label>
+                    <input className="input text-xs" value={fieldValues[`${f.key}__${ak}`] || ''}
+                      onChange={e => setFieldValues(v => ({ ...v, [`${f.key}__${ak}`]: e.target.value }))} />
+                  </div>
+                ))}
+              </>
             )}
-          </label>
-          {f.field_type === 'example' ? (
-            <textarea className="input text-sm resize-none" rows={2} value={fieldValues[f.key] || ''}
-              onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
-              placeholder="e.g. She {{loves}} him. ;;; Their {{love}} is eternal." />
-          ) : (
-            <input className="input text-sm" value={fieldValues[f.key] || ''}
-              onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
-              placeholder={f.description || f.label} />
-          )}
-        </div>
-      ))}
+          </div>
+        )
+      })}
       <button className="btn-primary" disabled={!word.trim() || saving} onClick={handleSave}>
         {saving ? 'Saving...' : saved ? '✓ Added!' : 'Add Card'}
       </button>
@@ -1403,7 +1460,8 @@ function HomographModal({ groups, blueprint, onConfirm, onClose }) {
             </div>
             <div className="space-y-2">
               {g.senses.map((s, sIdx) => {
-                const preview = defField ? s.card[defField.key] : ''
+                const rawPreview = defField ? s.card[defField.key] : ''
+                const preview = rawPreview && typeof rawPreview === 'object' ? rawPreview.text : rawPreview
                 return (
                   <label key={sIdx} className="flex items-start gap-3 cursor-pointer p-2 rounded-lg transition-colors hover:bg-white/5">
                     <input type="checkbox" checked={s.selected} onChange={() => toggle(gIdx, sIdx)} className="mt-0.5 flex-shrink-0" />
@@ -1468,8 +1526,10 @@ function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
       <div className="space-y-3 max-h-[55vh] overflow-auto pr-1">
         {decisions.map(({ incoming, action }, idx) => {
           const existing   = collisions[idx].existing
-          const existingVal = defField ? existing.fields?.[defField.key] : null
-          const incomingVal = defField ? incoming[defField.key] : null
+          const rawExisting = defField ? existing.fields?.[defField.key] : null
+          const rawIncoming = defField ? incoming[defField.key] : null
+          const existingVal = rawExisting && typeof rawExisting === 'object' ? rawExisting.text : rawExisting
+          const incomingVal = rawIncoming && typeof rawIncoming === 'object' ? rawIncoming.text : rawIncoming
 
           return (
             <div key={incoming.word + idx} className="rounded-xl p-4"
