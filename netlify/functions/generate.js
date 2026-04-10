@@ -1,6 +1,6 @@
 import { requireUser, json, error, handleCors } from './_db.js'
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
 
 // Strict JSON repair — strip markdown fences, fix common truncation
 function cleanAndParse(text) {
