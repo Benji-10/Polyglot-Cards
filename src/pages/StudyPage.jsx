@@ -348,7 +348,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   // Memoize clozeData by card id — must be above early returns (rules of hooks)
   const clozeData = useMemo(() => {
     if (config.interaction !== 'cloze' || !exampleField || !currentCard) return { hasCloze: false }
-    return parseCloze(currentCard.fields?.[exampleField.key] || '')
+    const fieldVal = currentCard.fields?.[exampleField.key]
+    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    return parseCloze(raw)
   }, [currentCard?.id, config.interaction, exampleField?.key]) // eslint-disable-line
 
   // Generate multiple choice options when card changes
@@ -479,7 +481,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
   const submitCloze = () => {
     if (!currentCard || phase !== 'prompt') return
-    const clozeData = parseCloze(currentCard.fields?.[exampleField?.key] || '')
+    const fieldVal = currentCard.fields?.[exampleField?.key]
+    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    const clozeData = parseCloze(raw)
     const result = fuzzyMatch(clozeAnswer, clozeData.answer || '', { strictAccents, strictMode })
     reveal({ ...result, answer: clozeData.answer, typed: clozeAnswer })
   }
@@ -774,16 +778,15 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 }
 
 // ── Helper: what to show on front ──────────────────────────
-// exampleField and contextLanguage are optional — only needed for targetToSource cloze context
 function getFront(card, direction, blueprint, deck, exampleField) {
   const contextLanguage = deck?.context_language || 'target'
 
   if (direction === 'targetToSource') {
     const context = card.fields?.context || null
-    // Cloze sentence context: pick a random sentence, strip the cloze markers for a preview
     let clozeSentence = null
     if (contextLanguage === 'cloze' && exampleField) {
-      const raw = card.fields?.[exampleField.key] || ''
+      const fieldVal = card.fields?.[exampleField.key]
+      const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
       if (raw) {
         const { before, answer, after, hasCloze } = parseCloze(raw)
         clozeSentence = hasCloze ? { before, answer, after } : null
@@ -798,12 +801,14 @@ function getFront(card, direction, blueprint, deck, exampleField) {
     }
   }
 
-  // sourceToTarget: show source_translation as the prompt
+  // sourceToTarget: show source_translation as the prompt (always a plain string)
   const srcField = blueprint.find(f => f.key === 'source_translation')
     || blueprint.find(f => f.key === 'definition')
     || blueprint.find(f => f.key === 'reading')
     || blueprint[0]
-  const val = srcField ? card.fields?.[srcField.key] : null
+  const rawVal = srcField ? card.fields?.[srcField.key] : null
+  // source_translation is always a plain string, but guard for object shape just in case
+  const val = rawVal && typeof rawVal === 'object' ? rawVal.text : rawVal
   return {
     word: val || card.word,
     label: deck?.source_language || 'Source',
@@ -816,16 +821,16 @@ function getFront(card, direction, blueprint, deck, exampleField) {
 }
 
 // ── Helper: what counts as the correct answer ──────────────
-// In sourceToTarget, match against source_translation (single clean word), not definition
 function getAnswer(card, direction, blueprint, deck) {
   if (direction === 'targetToSource') {
     const srcField = blueprint.find(f => f.key === 'source_translation')
       || blueprint.find(f => f.key === 'definition')
       || blueprint.find(f => f.key === 'reading')
       || blueprint[0]
-    return srcField ? card.fields?.[srcField.key] : card.word
+    const raw = srcField ? card.fields?.[srcField.key] : null
+    // Fields may be objects { text, ... } or plain strings
+    return raw && typeof raw === 'object' ? raw.text : (raw || card.word)
   }
-  // sourceToTarget: the target word itself
   return card.word
 }
 
@@ -899,14 +904,16 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
           <div className="space-y-2.5 flex-1 overflow-auto">
             {blueprint.map(field => {
               const value = backCard?.fields?.[field.key]
-              if (!value) return null
+              // value may be a string (unannotated) or object { text, ... } (annotated/example)
+              const textVal = value && typeof value === 'object' ? value.text : value
+              if (!textVal) return null
               return (
                 <div key={field.key} className="flex gap-2 min-w-0">
                   <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '80px' }}>{field.label}</span>
                   <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
-                      ? <ExampleDisplay text={value} cardId={backCard?.id} />
-                      : <RubyText value={value} fieldKey={field.key} cardFields={backCard?.fields} phonetics={field.phonetics} />
+                      ? <ExampleDisplay fieldValue={value} cardId={backCard?.id} />
+                      : <RubyText fieldValue={value} phonetics={field.phonetics} />
                     }
                   </div>
                 </div>
@@ -932,18 +939,48 @@ function PromptCard({ front, deck }) {
   )
 }
 
-function ExampleDisplay({ text, cardId }) {
-  // Memoize the chosen sentence by cardId so keystrokes don't re-pick
-  const sentence = useMemo(() => pickRandomExample(text), [text, cardId]) // eslint-disable-line
+function ExampleDisplay({ fieldValue, cardId }) {
+  // fieldValue may be { text: "...", romanisation: "..." } or a plain string
+  const raw = fieldValue && typeof fieldValue === 'object' ? fieldValue.text : (fieldValue || '')
+  const annotations = fieldValue && typeof fieldValue === 'object'
+    ? Object.entries(fieldValue).filter(([k]) => k !== 'text')
+    : []
+
+  // Pick a sentence index once per card — same index applies to all annotation lines
+  const sentenceParts = raw.split(' ;;; ').map(s => s.trim()).filter(Boolean)
+  const idx = useMemo(() => Math.floor(Math.random() * Math.max(sentenceParts.length, 1)), [cardId]) // eslint-disable-line
+  const sentence = sentenceParts[idx] || raw
+
   const { before, answer, after, hasCloze } = parseCloze(sentence)
-  if (!hasCloze) return <span style={{ color: 'var(--text-primary)' }}>{sentence}</span>
+
+  const renderSentence = (text) => {
+    const { before: b, answer: a, after: af, hasCloze: hc } = parseCloze(text)
+    if (!hc) return <span>{text}</span>
+    return (
+      <>
+        {b}
+        <mark style={{ background: 'rgba(124,106,240,0.2)', color: 'var(--accent-primary)', borderRadius: '3px', padding: '0 3px' }}>
+          {a}
+        </mark>
+        {af}
+      </>
+    )
+  }
+
   return (
     <span style={{ color: 'var(--text-primary)', fontFamily: fontForText(sentence) }}>
-      {before}
-      <mark style={{ background: 'rgba(124,106,240,0.2)', color: 'var(--accent-primary)', borderRadius: '3px', padding: '0 3px' }}>
-        {answer}
-      </mark>
-      {after}
+      {renderSentence(sentence)}
+      {/* Show the matching annotation line (same index) below */}
+      {annotations.map(([key, annoRaw]) => {
+        const annoParts = (annoRaw || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
+        const annoSentence = annoParts[idx] || annoRaw || ''
+        if (!annoSentence) return null
+        return (
+          <span key={key} className="block text-xs mt-1" style={{ color: 'var(--text-muted)', fontFamily: fontForText(annoSentence) }}>
+            {renderSentence(annoSentence)}
+          </span>
+        )
+      })}
     </span>
   )
 }
