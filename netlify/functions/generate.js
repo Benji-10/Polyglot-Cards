@@ -60,7 +60,7 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
     }
     if (f.field_type === 'example') {
       lines.push(`    Generate 3 varied sentences separated by " ;;; ". Wrap ONLY the target word with {{word}}.`)
-      lines.push(`    Example: "나는 {{사랑}}해. ;;; 그것은 {{사랑}}이야. ;;; {{사랑}}은 아름다워."`)
+      lines.push(`    Example format: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
     }
     const keys = getPhoneticKeys(f.phonetics)
     const descs = PHONETIC_DESCRIPTIONS(f.key)
@@ -84,14 +84,15 @@ Source language: ${sourceLanguage}
 
 HOMOGRAPH RULE — CRITICAL:
 A homograph is a word with multiple distinct, unrelated meanings. Examples:
-- Korean "눈" → "eye" (body part) AND "snow" (weather) → 2 cards
-- Spanish "café" → "coffee" AND "brown" (colour) → 2 cards
+- French "café" → "coffee" (beverage) AND "café" (establishment) AND "brown" (colour) → 3 separate objects
+- English "bank" → "financial institution" AND "river bank" → 2 separate objects
 
 Rules for homographs:
-- If a word has 2 or more COMMON unrelated meanings, output ONE separate JSON object per meaning.
-- Each object must have "_meanings": <total count> and "_sense": "<very brief source-language label>".
+- Consider ALL common everyday meanings across ALL semantic domains.
+- Output ONE separate JSON object per distinct meaning. Never combine meanings.
+- Each object must have "_meanings": <total count of distinct meanings> and "_sense": "<very brief source-language label, e.g. 'beverage', 'colour', 'place'>".
+- CRITICAL: Every field in a given object must match ONLY that object's "_sense". Never mix data from different meanings across objects.
 - If a word has only one meaning, set "_meanings": 1 and "_sense": "".
-- Do NOT combine multiple meanings into one card.
 
 For each vocabulary item (or each meaning if a homograph), generate a JSON object with:
   - "word": the vocabulary item EXACTLY as given — no extra text, no parentheses
@@ -102,10 +103,9 @@ ${fieldLines}
 Rules:
 - Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
 - CRITICAL: Fill EVERY field. Do NOT leave any field empty or as "". Use a best approximation if uncertain.
-- Process EVERY word — output array must have at least as many objects as the input.
+- Process EVERY word — output array must have at least as many objects as the input list.
 - "word" must match the input word EXACTLY.
-- CRITICAL FOR HOMOGRAPHS: Every field must correspond to the specific "_sense". Never mix fields from different meanings.
-- "context" written in ${contextLanguage === 'cloze' || contextLanguage === 'target' ? targetLanguage : sourceLanguage}, 2-5 words. Leave "" only if completely unambiguous.
+- "context" must be written in ${contextLanguage === 'source' ? sourceLanguage : targetLanguage}. Keep it very brief (2–5 words). Leave "" only if the word is completely unambiguous.
 
 Expected output keys: ${exampleKeys.join(', ')}
 
@@ -123,7 +123,7 @@ export const handler = async (event) => {
     if (!vocab?.vocab || !blueprint) return error('vocab and blueprint required')
 
     const vocabArray      = vocab.vocab
-    const targetLanguage  = vocab.targetLanguage  || 'Korean'
+    const targetLanguage  = vocab.targetLanguage  || ''
     const sourceLanguage  = vocab.sourceLanguage  || 'English'
     const contextLanguage = vocab.contextLanguage || 'target'
 
