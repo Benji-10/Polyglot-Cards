@@ -1224,16 +1224,8 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
             onChange={e => onUpdate({ description: e.target.value })}
             placeholder="AI hint — describe what to put in this field" />
 
-          {field.field_type === 'example' && (
-            <div className="text-xs px-2 py-1.5 rounded-lg"
-              style={{ background: 'rgba(0,212,168,.08)', color: 'var(--accent-secondary)', border: '1px solid rgba(0,212,168,.2)' }}>
-              ✦ Cloze enabled — Gemini wraps the target word with {'{{word}}'}
-            </div>
-          )}
-
-          {/* Phonetics panel */}
-          {field.field_type !== 'example' && (
-            <div>
+          {/* Phonetics panel — available for all field types */}
+          <div>
               <button className="flex items-center gap-1.5 text-xs transition-colors"
                 style={{ color: hasAnnotations ? 'var(--accent-primary)' : 'var(--text-muted)' }}
                 onClick={() => setShowPhonetics(s => !s)}>
@@ -1292,7 +1284,6 @@ function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, is
                 </div>
               )}
             </div>
-          )}
         </div>
 
         <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
