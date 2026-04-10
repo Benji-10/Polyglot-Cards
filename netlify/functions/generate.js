@@ -33,48 +33,76 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
     return keys
   }
 
-  const PHONETIC_DESCRIPTIONS = (fieldKey) => ({
-    furigana:              `"${fieldKey}_furigana": hiragana/katakana above each kanji, formatted as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"`,
-    romaji:                `"${fieldKey}_romaji": Hepburn romanisation`,
-    pinyin:                `"${fieldKey}_pinyin": Pīnyīn with tone marks`,
-    bopomofo:              `"${fieldKey}_bopomofo": Zhùyīn Fúhào symbols (ㄅㄆㄇ)`,
-    jyutping:              `"${fieldKey}_jyutping": Jyutping romanisation for Cantonese`,
-    hangulRomanisation:    `"${fieldKey}_hangulRomanisation": Revised Romanisation of Korean`,
-    cantoneseRomanisation: `"${fieldKey}_cantoneseRomanisation": Yale Cantonese romanisation`,
-    romanisation:          `"${fieldKey}_romanisation": standard Latin-script transliteration`,
-    cyrillicTranslit:      `"${fieldKey}_cyrillicTranslit": Latin transliteration of Cyrillic`,
-    tones:                 `"${fieldKey}_tones": tonal representation (numbered or marked)`,
-    diacritics:            `"${fieldKey}_diacritics": full vowel-marked version (tashkeel, nikud, etc.)`,
-    ipa:                   `"${fieldKey}_ipa": IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/`,
-    english:               `"${fieldKey}_english": concise English gloss or translation`,
-  })
+  // Human-readable descriptions for each annotation type
+  const ANNOTATION_DESCRIPTIONS = {
+    furigana:              'hiragana/katakana above each kanji, as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"',
+    romaji:                'Hepburn romanisation',
+    pinyin:                'Pīnyīn with tone marks',
+    bopomofo:              'Zhùyīn Fúhào symbols (ㄅㄆㄇ)',
+    jyutping:              'Jyutping romanisation for Cantonese',
+    hangulRomanisation:    'Revised Romanisation of Korean',
+    cantoneseRomanisation: 'Yale Cantonese romanisation',
+    romanisation:          'standard Latin-script transliteration',
+    cyrillicTranslit:      'Latin transliteration of Cyrillic',
+    tones:                 'tonal representation (numbered or marked)',
+    diacritics:            'full vowel-marked version (tashkeel, nikud, etc.)',
+    ipa:                   'IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/',
+    english:               'concise English gloss or translation',
+  }
 
+  // Build field instructions. Each field with annotations becomes an object:
+  //   { "text": "<value>", "<annotationType>": "<annotation>" }
+  // Fields without annotations are plain strings.
   const fieldLines = blueprint.map(f => {
-    const lines = [`  - "${f.key}": ${f.description || f.label}`]
+    const annotationKeys = getPhoneticKeys(f.phonetics)
+    const hasAnnotations = annotationKeys.length > 0
+    const isExample = f.field_type === 'example'
+
     if (f.key === 'source_translation') {
-      lines.push(`    CRITICAL: ONE clean word in ${sourceLanguage}. No slashes, no alternatives. Match the specific meaning.`)
+      return `  - "${f.key}": string — ONE clean word in ${sourceLanguage}. No slashes, no alternatives. Match the specific meaning.`
     }
     if (f.key === 'context') {
       const ctxLang = contextLanguage === 'source' ? sourceLanguage : targetLanguage
-      lines.push(`    Write in ${ctxLang}. Very brief (2-5 words), disambiguates this meaning. Leave "" if unambiguous.`)
+      return `  - "${f.key}": string — Write in ${ctxLang}. Very brief (2-5 words), disambiguates this meaning. Leave "" if unambiguous.`
     }
-    if (f.field_type === 'example') {
-      lines.push(`    Generate 3 varied sentences separated by " ;;; ". Wrap ONLY the target word with {{word}}.`)
-      lines.push(`    Example format: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
+
+    if (!hasAnnotations && !isExample) {
+      return `  - "${f.key}": string — ${f.description || f.label}`
     }
-    const keys = getPhoneticKeys(f.phonetics)
-    const descs = PHONETIC_DESCRIPTIONS(f.key)
-    keys.forEach(pk => { if (descs[pk]) lines.push(`  - ${descs[pk]}`) })
-    return lines.join('\n')
+
+    // Fields with annotations or example type become objects
+    const objectLines = []
+    if (isExample) {
+      objectLines.push(`    "text": 3 varied sentences separated by " ;;; ", wrapping ONLY the target word with {{word}}. Example: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
+      annotationKeys.forEach(ak => {
+        if (ANNOTATION_DESCRIPTIONS[ak]) {
+          objectLines.push(`    "${ak}": same 3 sentences in the same order but with ${ANNOTATION_DESCRIPTIONS[ak]} instead of the target script. Also wrap the equivalent word with {{word}}.`)
+        }
+      })
+    } else {
+      objectLines.push(`    "text": ${f.description || f.label}`)
+      annotationKeys.forEach(ak => {
+        if (ANNOTATION_DESCRIPTIONS[ak]) {
+          objectLines.push(`    "${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`)
+        }
+      })
+    }
+
+    return `  - "${f.key}": object —\n${objectLines.join('\n')}`
   }).join('\n')
 
+  // Build expected output keys list for the prompt footer
   const exampleKeys = ['word', '_meanings', '_sense']
   blueprint.forEach(f => {
-    exampleKeys.push(f.key)
-    getPhoneticKeys(f.phonetics).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
+    const annotationKeys = getPhoneticKeys(f.phonetics)
+    if (annotationKeys.length > 0 || f.field_type === 'example') {
+      const subKeys = ['text', ...annotationKeys].map(k => `"${k}"`).join(', ')
+      exampleKeys.push(`${f.key}: {${subKeys}}`)
+    } else {
+      exampleKeys.push(f.key)
+    }
   })
 
-  // Strip any "(sense)" hints — the prompt always receives clean words
   const cleanVocab = vocabBatch.map(v => stripSenseHint(v))
 
   return `You are a language learning assistant generating flashcard data.
@@ -106,8 +134,10 @@ Rules:
 - Process EVERY word — output array must have at least as many objects as the input list.
 - "word" must match the input word EXACTLY.
 - "context" must be written in ${contextLanguage === 'source' ? sourceLanguage : targetLanguage}. Keep it very brief (2–5 words). Leave "" only if the word is completely unambiguous.
+- For fields that are objects: always include "text". Include annotation keys only if specified above.
+- Plain string fields (source_translation, context, and fields with no annotations) stay as strings — do NOT wrap them in objects.
 
-Expected output keys: ${exampleKeys.join(', ')}
+Expected output shape per item: ${exampleKeys.join(', ')}
 
 Now generate for: ${JSON.stringify(cleanVocab)}`
 }
