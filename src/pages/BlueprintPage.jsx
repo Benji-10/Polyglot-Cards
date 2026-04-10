@@ -189,14 +189,14 @@ export default function BlueprintPage() {
       const descChanged = of_.description !== nf.description
       const typeChanged = of_.field_type  !== nf.field_type
 
-      // Phonetics: regen when any annotation is added OR changed (but not removed).
-      // Removing an annotation leaves existing data in DB — no regen needed.
+      // Phonetics: regen whenever the annotation set changes in a way that needs new data.
+      // - Ruby changed to any different value (including switching between two non-'none' values)
+      // - Any extra added (was not there before)
+      // Does NOT regen when annotations are only removed (existing data stays in DB, just not shown).
       const oldPh = normalisePhonetics(of_.phonetics)
       const newPh = normalisePhonetics(nf.phonetics)
-      // Ruby changed to a different non-'none' value (add or switch)
-      const rubyChanged  = newPh.ruby !== 'none' && newPh.ruby !== oldPh.ruby
-      // Any extra was added that wasn't there before
-      const extrasAdded  = newPh.extras.some(k => !oldPh.extras.includes(k))
+      const rubyChanged = newPh.ruby !== oldPh.ruby && newPh.ruby !== 'none'
+      const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
       const phonNeedsRegen = rubyChanged || extrasAdded
 
       if (descChanged || typeChanged || phonNeedsRegen) regenFields.push(nf)
@@ -208,20 +208,37 @@ export default function BlueprintPage() {
       .filter(f => !MANDATORY_FIELD_KEYS.includes(f.key) && !newKeys.has(f.key))
       .map(f => f.key)
 
-    return { regenFields, deletedKeys }
+    // Also compute annotation sub-keys that were removed (e.g., fieldKey_english)
+    // so we can delete them from card data
+    const deletedAnnotationKeys = []
+    for (const nf of newFields) {
+      const of_ = oldFields.find(f => f.key === nf.key)
+      if (!of_) continue
+      const oldPh = normalisePhonetics(of_.phonetics)
+      const newPh = normalisePhonetics(nf.phonetics)
+      if (oldPh.ruby !== 'none' && oldPh.ruby !== newPh.ruby) {
+        deletedAnnotationKeys.push(`${nf.key}_${oldPh.ruby}`)
+      }
+      oldPh.extras.forEach(k => {
+        if (!newPh.extras.includes(k)) deletedAnnotationKeys.push(`${nf.key}_${k}`)
+      })
+    }
+
+    return { regenFields, deletedKeys, deletedAnnotationKeys }
   }
 
   const runBackgroundRegen = async (savedFields, _allCards) => {
     const oldFields = originalBlueprintRef.current || []
-    const { regenFields, deletedKeys } = computeFieldChanges(oldFields, savedFields)
+    const { regenFields, deletedKeys, deletedAnnotationKeys } = computeFieldChanges(oldFields, savedFields)
 
-    // Delete removed field data from cards (fire-and-forget)
-    if (deletedKeys.length > 0) {
-      api.deleteCardFields(deckId, deletedKeys).catch(e => console.error('Field delete error:', e))
+    // Delete removed field data and removed annotation sub-keys from cards
+    const allDeleted = [...deletedKeys, ...deletedAnnotationKeys]
+    if (allDeleted.length > 0) {
+      api.deleteCardFields(deckId, allDeleted).catch(e => console.error('Field delete error:', e))
     }
 
     if (regenFields.length === 0) {
-      if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
+      if (allDeleted.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
       originalBlueprintRef.current = savedFields
       return
     }
@@ -441,10 +458,27 @@ export default function BlueprintPage() {
           const vocab = res.data.flat().map(v => String(v).trim()).filter(Boolean)
           if (!vocab.length) { setImportError('No words found in CSV'); setImportState('error'); return }
 
+          // Warn if the CSV looks like a structured file (multiple populated columns per row)
+          // — the AI importer expects a flat word list, not headers + data
+          const rows = res.data.filter(r => Array.isArray(r) && r.some(c => String(c).trim()))
+          if (rows.length >= 2) {
+            const firstRowCols = rows[0].filter(c => String(c).trim()).length
+            const secondRowCols = rows[1].filter(c => String(c).trim()).length
+            if (firstRowCols > 1 && secondRowCols > 1) {
+              setImportError(
+                'This looks like a structured CSV with multiple columns. ' +
+                'The AI importer expects a plain word list (one word per cell). ' +
+                'Use the "Direct CSV" tab if you want to import a structured file.'
+              )
+              setImportState('error')
+              return
+            }
+          }
+
           const batches = []
           for (let i = 0; i < vocab.length; i += BATCH_SIZE) batches.push(vocab.slice(i, i + BATCH_SIZE))
           progress.reset(batches.length)
-          setProgressMsg(`Starting — ${batches.length} batch${batches.length !== 1 ? 'es' : ''}`)
+          setProgressMsg('Generating cards…')
 
           let allGeneratedCards = []
           let failedBatchCount = 0
@@ -481,30 +515,34 @@ export default function BlueprintPage() {
             return requiredKeys.some(k => c[k] && c[k] !== '')
           })
 
-          // Run 2 batches in parallel — doubles throughput within rate limit
+          // Rolling pipeline: 2 batches in-flight at once.
+          // As soon as any slot frees up, the next batch starts immediately.
           const CONCURRENCY = 2
-          for (let i = 0; i < batches.length; i += CONCURRENCY) {
-            const chunkIndices = []
-            for (let j = i; j < Math.min(i + CONCURRENCY, batches.length); j++) chunkIndices.push(j)
+          let nextBatch = 0
+          let completedCount = 0
 
-            progress.startBatch(i)  // animate bar for the first in chunk
-            setProgressMsg(`Batch${chunkIndices.length > 1 ? 'es' : ''} ${chunkIndices.map(x => x + 1).join(' & ')} / ${batches.length}`)
-
-            const results = await Promise.all(chunkIndices.map(idx => fetchBatch(idx)))
-
-            for (const { batchIdx, genRes, lastErr } of results) {
-              if (lastErr || !genRes?.cards?.length) {
-                const msg = lastErr?.message || 'No cards returned'
-                toast.error(`Batch ${batchIdx + 1} failed: ${msg}`)
-                failedBatchCount++
-                continue
+          await new Promise(resolve => {
+            const launch = () => {
+              while (nextBatch < batches.length && (nextBatch - completedCount) < CONCURRENCY) {
+                const idx = nextBatch++
+                progress.startBatch(idx)
+                fetchBatch(idx).then(({ genRes, lastErr }) => {
+                  completedCount++
+                  if (lastErr || !genRes?.cards?.length) {
+                    failedBatchCount++
+                  } else {
+                    allGeneratedCards.push(...validateCards(genRes.cards))
+                    setProgressMsg(`${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated…`)
+                  }
+                  progress.completeBatch(idx)
+                  if (completedCount >= batches.length) resolve()
+                  else launch()
+                })
               }
-              allGeneratedCards.push(...validateCards(genRes.cards))
             }
-
-            progress.completeBatch(i)
-            setProgressMsg(`${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated (batch ${Math.min(i + CONCURRENCY, batches.length)} / ${batches.length})`)
-          }
+            launch()
+            if (batches.length === 0) resolve()
+          })
 
           if (!allGeneratedCards.length) {
             setImportError(failedBatchCount > 0 ? `All ${failedBatchCount} batch${failedBatchCount !== 1 ? 'es' : ''} failed — check your connection and try again` : 'No valid cards generated')
@@ -1048,40 +1086,27 @@ function ImportReviewing() {
 }
 
 function ImportProgress({ progressMsg, totalImported, displayPct, barRef }) {
-  const isSaving   = progressMsg?.includes('Saving')
-  const isRetrying = progressMsg?.includes('retry')
-  const icon       = isSaving ? '💾' : isRetrying ? '🔄' : '✨'
-  const barColor   = isRetrying
-    ? 'linear-gradient(90deg, #fdcb6e, #e17055)'
-    : isSaving
-      ? 'linear-gradient(90deg, var(--accent-secondary), var(--accent-primary))'
-      : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
+  const isSaving = progressMsg?.includes('Saving')
+  const barColor = isSaving
+    ? 'linear-gradient(90deg, var(--accent-secondary), var(--accent-primary))'
+    : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
 
   return (
     <div className="card p-6">
-      <div className="flex items-center gap-3 mb-3">
-        <span className="text-xl flex-shrink-0" style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>{icon}</span>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium mb-0.5" style={{ color: 'var(--text-primary)' }}>{progressMsg || 'Generating…'}</div>
-          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {isSaving
-              ? 'Checking for duplicates and saving…'
-              : totalImported > 0
-                ? `${totalImported} card${totalImported !== 1 ? 's' : ''} ready`
-                : 'Estimated time adapts per batch'}
-          </div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+          {isSaving ? 'Saving cards…' : progressMsg || 'Generating…'}
         </div>
-        <div className="text-sm font-mono tabular-nums flex-shrink-0"
-          style={{ color: isRetrying ? 'var(--accent-danger)' : 'var(--accent-primary)' }}>
+        <div className="text-sm font-mono tabular-nums" style={{ color: 'var(--accent-primary)' }}>
           {displayPct}%
         </div>
       </div>
       <div className="progress-bar">
         <div ref={barRef} className="import-progress-fill" style={{ width: '0%', background: barColor }} />
       </div>
-      {isRetrying && (
-        <div className="text-xs mt-2" style={{ color: '#fdcb6e' }}>
-          Retrying with exponential backoff — this batch will be re-attempted automatically
+      {!isSaving && (
+        <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+          {totalImported > 0 ? `${totalImported} card${totalImported !== 1 ? 's' : ''} ready` : 'AI is filling in card fields…'}
         </div>
       )}
     </div>
