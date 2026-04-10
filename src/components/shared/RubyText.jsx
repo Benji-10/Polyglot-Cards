@@ -1,43 +1,41 @@
 import { fontForText } from '../../lib/utils'
 
 /**
- * RubyText renders a field value with phonetic annotations.
+ * RubyText — renders a field value with phonetic annotations.
  *
- * phonetics shape (new):  { ruby: 'furigana'|'romaji'|'pinyin'|...|'none', extras: ['ipa','english','diacritics',...] }
- * phonetics shape (old):  string[] — legacy flat array, handled for backwards compat
+ * Field values are now objects:  { text: "...", furigana: "...", english: "..." }
+ * Old flat string values are handled transparently for backward compat.
  *
- * Ruby annotation: shown above the word using <ruby>/<rt>
- * Extras:
- *   diacritics / tones / vowel marks — shown in (parentheses) after the word
- *   ipa                              — shown in /slashes/ after the word
- *   english                          — shown on a new line below in muted text
- *   transliteration (catch-all)      — shown in (parentheses) after
+ * `fieldValue` is the raw value from card.fields[fieldKey]:
+ *   - New shape: { text, [annotationType]: value, ... }
+ *   - Old shape: "plain string"  (no annotations — compat)
  */
-export default function RubyText({ value, fieldKey, cardFields, phonetics, className = '', style = {} }) {
-  if (!value) return null
+export default function RubyText({ fieldValue, phonetics, className = '', style = {} }) {
+  const { text, annotations } = resolveField(fieldValue)
 
-  // Normalise phonetics to new shape
+  if (!text) return null
+
   const ph = normalise(phonetics)
 
-  // No annotations at all
   if (ph.ruby === 'none' && ph.extras.length === 0) {
-    return <span className={className} style={{ ...style, fontFamily: fontForText(value) }}>{value}</span>
+    return <span className={className} style={{ ...style, fontFamily: fontForText(text) }}>{text}</span>
   }
 
-  const rubyAnnotation = ph.ruby !== 'none' ? cardFields?.[`${fieldKey}_${ph.ruby}`] : null
-  const extras = ph.extras.map(k => ({ key: k, value: cardFields?.[`${fieldKey}_${k}`] })).filter(e => e.value)
+  const rubyAnnotation = ph.ruby !== 'none' ? annotations[ph.ruby] : null
+  const extras = ph.extras
+    .map(k => ({ key: k, value: annotations[k] }))
+    .filter(e => e.value)
 
   return (
     <span className={className} style={style}>
-      {/* Ruby layer */}
       {rubyAnnotation
         ? ph.ruby === 'furigana'
-          ? <FuriganaRuby base={value} furigana={rubyAnnotation} />
-          : <SimpleRuby base={value} annotation={rubyAnnotation} />
-        : <span style={{ fontFamily: fontForText(value) }}>{value}</span>
+          ? <FuriganaRuby base={text} furigana={rubyAnnotation} />
+          : <SimpleRuby base={text} annotation={rubyAnnotation} />
+        : <span style={{ fontFamily: fontForText(text) }}>{text}</span>
       }
 
-      {/* Inline extras (diacritics, ipa, transliterations) */}
+      {/* Inline extras (ipa, diacritics, transliterations) */}
       {extras.filter(e => e.key !== 'english').map(e => (
         <span key={e.key} className="ml-1" style={{ fontSize: '0.82em', color: 'var(--text-secondary)', fontFamily: e.key === 'ipa' ? 'monospace' : fontForText(e.value) }}>
           {e.key === 'ipa' ? `/${e.value}/` : `(${e.value})`}
@@ -54,20 +52,37 @@ export default function RubyText({ value, fieldKey, cardFields, phonetics, class
   )
 }
 
-// Normalise legacy flat-array or new object shape
+/**
+ * Resolve a field value into { text, annotations }.
+ * New shape: { text: "...", annotationType: "..." }
+ * Old shape: "plain string"
+ */
+export function resolveField(fieldValue) {
+  if (!fieldValue) return { text: '', annotations: {} }
+  if (typeof fieldValue === 'string') return { text: fieldValue, annotations: {} }
+  if (typeof fieldValue === 'object') {
+    const { text = '', ...annotations } = fieldValue
+    return { text, annotations }
+  }
+  return { text: String(fieldValue), annotations: {} }
+}
+
+/**
+ * Get just the plain text from a field value — for search, cloze, display without annotations.
+ */
+export function fieldText(fieldValue) {
+  return resolveField(fieldValue).text
+}
+
 function normalise(phonetics) {
   if (!phonetics) return { ruby: 'none', extras: [] }
   if (Array.isArray(phonetics)) {
-    // Legacy: first ruby-capable item becomes ruby, rest become extras
     const RUBY_KEYS = ['furigana','romaji','pinyin','bopomofo','jyutping','romanisation','tones','cantoneseRomanisation','hangulRomanisation','cyrillicTranslit']
     const ruby = phonetics.find(k => RUBY_KEYS.includes(k)) || 'none'
     const extras = phonetics.filter(k => !RUBY_KEYS.includes(k) || k !== ruby)
     return { ruby, extras }
   }
-  return {
-    ruby: phonetics.ruby || 'none',
-    extras: phonetics.extras || [],
-  }
+  return { ruby: phonetics.ruby || 'none', extras: phonetics.extras || [] }
 }
 
 function SimpleRuby({ base, annotation }) {
@@ -84,7 +99,6 @@ function SimpleRuby({ base, annotation }) {
 }
 
 function FuriganaRuby({ base, furigana }) {
-  // Try "kanji:reading kanji2:reading2" format
   const pairs = furigana.split(' ').map(p => {
     const c = p.indexOf(':')
     return c === -1 ? null : { kanji: p.slice(0, c), reading: p.slice(c + 1) }
