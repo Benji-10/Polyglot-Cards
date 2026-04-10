@@ -372,16 +372,17 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   }
 
   // Focus the active input whenever we enter the prompt phase.
-  // autoFocus is unreliable because the element may be hidden (height:0) at mount time.
+  // When animations are off, focus immediately (no transition to wait for).
+  // When animations are on, wait 60ms for the height:auto transition to complete.
   useEffect(() => {
     if (phase !== 'prompt') return
-    // Small delay so the element is visible (height:auto) before we focus
+    const delay = animationsEnabled ? 60 : 0
     const id = setTimeout(() => {
       if (config.interaction === 'typing') typingInputRef.current?.focus()
       else if (config.interaction === 'cloze') clozeInputRef.current?.focus()
-    }, 60)
+    }, delay)
     return () => clearTimeout(id)
-  }, [phase, config.interaction])
+  }, [phase, config.interaction, animationsEnabled])
 
   // Cleanup flip timer on unmount
   useEffect(() => () => { if (flipTimerRef.current) clearTimeout(flipTimerRef.current) }, [])
@@ -401,10 +402,14 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     }))
     const next = cardIdx + 1
     if (next >= total) { setDone(true); return }
-    // Blur immediately so keyboard handler works during flip
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
     setCardIdx(next)
     setFrontCardIdx(next)
+    if (!animationsEnabled) {
+      setBackCardIdx(next)
+      resetCard()
+      return
+    }
     setPhase('flipping-back')
     if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
     flipTimerRef.current = setTimeout(() => {
@@ -432,6 +437,11 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
     setCardIdx(next)
     setFrontCardIdx(next)
+    if (!animationsEnabled) {
+      setBackCardIdx(next)
+      resetCard()
+      return
+    }
     setPhase('flipping-back')
     if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
     flipTimerRef.current = setTimeout(() => {
