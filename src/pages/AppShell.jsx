@@ -43,7 +43,7 @@ export default function AppShell() {
         </div>
 
         {/* Scrollable nav — grows to fill space between logo and footer */}
-        <div className="flex-1 overflow-y-auto min-h-0 py-2">
+        <div className="flex-1 overflow-y-auto min-h-0 py-2 flex flex-col">
           {/* Active deck pill */}
           {activeDeck ? (
             <div
@@ -113,8 +113,8 @@ export default function AppShell() {
             </div>
           )}
 
-          {/* App nav — always visible, pinned at bottom of scroll area */}
-          <div className="px-3 mt-4 space-y-0.5">
+          {/* App nav — pushed to bottom of scroll area */}
+          <div className="px-3 mt-auto pt-4 pb-2 space-y-0.5">
             <div className="section-title px-2 mb-2">App</div>
             <NavLink
               to="/"
