@@ -189,16 +189,20 @@ export default function BlueprintPage() {
       const descChanged = of_.description !== nf.description
       const typeChanged = of_.field_type  !== nf.field_type
 
+      // Phonetics: regen when any annotation is added OR changed (but not removed).
+      // Removing an annotation leaves existing data in DB — no regen needed.
       const oldPh = normalisePhonetics(of_.phonetics)
       const newPh = normalisePhonetics(nf.phonetics)
-      const rubyAdded   = newPh.ruby !== 'none' && newPh.ruby !== oldPh.ruby
-      const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
-      const phonNeedsRegen = rubyAdded || extrasAdded
+      // Ruby changed to a different non-'none' value (add or switch)
+      const rubyChanged  = newPh.ruby !== 'none' && newPh.ruby !== oldPh.ruby
+      // Any extra was added that wasn't there before
+      const extrasAdded  = newPh.extras.some(k => !oldPh.extras.includes(k))
+      const phonNeedsRegen = rubyChanged || extrasAdded
 
       if (descChanged || typeChanged || phonNeedsRegen) regenFields.push(nf)
     }
 
-    // Keys that existed before but are gone now — their data should be purged from cards
+    // Keys removed from blueprint → purge their data from all cards
     const newKeys = new Set(newFields.map(f => f.key))
     const deletedKeys = oldFields
       .filter(f => !MANDATORY_FIELD_KEYS.includes(f.key) && !newKeys.has(f.key))
@@ -211,7 +215,7 @@ export default function BlueprintPage() {
     const oldFields = originalBlueprintRef.current || []
     const { regenFields, deletedKeys } = computeFieldChanges(oldFields, savedFields)
 
-    // Delete removed field data from cards first (fire and forget — non-blocking)
+    // Delete removed field data from cards (fire-and-forget)
     if (deletedKeys.length > 0) {
       api.deleteCardFields(deckId, deletedKeys).catch(e => console.error('Field delete error:', e))
     }
@@ -222,112 +226,71 @@ export default function BlueprintPage() {
       return
     }
 
-    // Fetch fresh cards — don't rely on a potentially stale ref
+    // Fetch fresh cards — avoids stale cache
     let freshCards
-    try {
-      freshCards = await api.getCards(deckId)
-    } catch (e) {
-      toast.error(`Could not fetch cards for refresh: ${e.message}`)
-      return
-    }
+    try { freshCards = await api.getCards(deckId) }
+    catch (e) { toast.error(`Could not fetch cards for refresh: ${e.message}`); return }
     if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
 
-    // For each regen field, find all cards missing that field's data.
-    // We regen ALL regen fields in a single Gemini call per batch of cards.
-    // Cards that already have ALL regen fields filled are skipped entirely.
+    // Only regen cards that are actually missing at least one regen field
     const cardsNeedingRegen = freshCards.filter(card =>
-      regenFields.some(f => {
-        const val = card.fields?.[f.key]
-        return !val || val === ''
-      })
+      regenFields.some(f => { const v = card.fields?.[f.key]; return !v || v === '' })
     )
-
     if (cardsNeedingRegen.length === 0) {
       if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
       originalBlueprintRef.current = savedFields
       return
     }
 
-    // Batch: aim for ~15 cards per batch (generous — not too many fields × words)
-    const WORDS_PER_BATCH = Math.max(5, Math.min(15, Math.floor(200 / Math.max(regenFields.length, 1))))
+    // Use the same batch size as AI import — keeps regen and import batch counts comparable
     const batches = []
-    for (let i = 0; i < cardsNeedingRegen.length; i += WORDS_PER_BATCH) {
-      batches.push(cardsNeedingRegen.slice(i, i + WORDS_PER_BATCH))
+    for (let i = 0; i < cardsNeedingRegen.length; i += BATCH_SIZE) {
+      batches.push(cardsNeedingRegen.slice(i, i + BATCH_SIZE))
     }
 
     setRegenState('running')
-    setRegenMsg(`Refreshing ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} for ${cardsNeedingRegen.length} card${cardsNeedingRegen.length !== 1 ? 's' : ''}…`)
+    setRegenMsg(`Refreshing ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} for ${cardsNeedingRegen.length} card${cardsNeedingRegen.length !== 1 ? 's' : ''} (${batches.length} batch${batches.length !== 1 ? 'es' : ''})…`)
     updateRegenBar(0)
 
     let totalPatched = 0
-    let anyFailed = false
+    let completedBatches = 0
     const failedBatchNums = []
-    const targetLang = deckRef.current?.target_language || 'Korean'
+    const targetLang = deckRef.current?.target_language || deck?.target_language || ''
+    const allPatches = []
 
-    for (let i = 0; i < batches.length; i++) {
-      const batchCards = batches[i]
-      const batchCeil  = ((i + 1) / batches.length) * 100
-      const batchStart = (i     / batches.length) * 100
-      const startTime  = performance.now()
-      const ESTIMATE   = 10000
-
-      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
-      const tickRegen = () => {
-        const elapsed = performance.now() - startTime
-        const t = Math.min(elapsed / ESTIMATE, 0.9) // cap at 90% — save the last 10% for patch
-        updateRegenBar(batchStart + (batchCeil - batchStart) * t)
-        if (t < 0.9) regenRafRef.current = requestAnimationFrame(tickRegen)
-      }
-      regenRafRef.current = requestAnimationFrame(tickRegen)
-      setRegenMsg(`Batch ${i + 1} / ${batches.length} — generating…`)
-
-      // Build vocab items: include sense hint for homographs so Gemini generates correctly
+    // Helper: process one batch with independent retry
+    const processBatch = async (batchIdx, batchCards) => {
       const vocabItems = batchCards.map(card => {
         const sense = card.fields?.context || card.fields?.source_translation || ''
         return sense ? `${card.word} (${sense})` : card.word
       })
 
-      // Exponential backoff retry per batch
       const MAX_RETRIES = 4
       let genRes = null
       let lastErr = null
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 0) {
           const delay = 1500 * Math.pow(2, attempt - 1)
-          setRegenMsg(`Batch ${i + 1} / ${batches.length} — retry ${attempt}/${MAX_RETRIES} (${Math.round(delay / 1000)}s)…`)
           await new Promise(r => setTimeout(r, delay))
         }
         try {
-          genRes = await api.generateCards(
-            deckId,
-            {
-              vocab: vocabItems,
-              targetLanguage: targetLang,
-              sourceLanguage: deckRef.current?.source_language || 'English',
-              contextLanguage: deckRef.current?.context_language || 'target',
-            },
-            regenFields
-          )
+          genRes = await api.generateCards(deckId, {
+            vocab: vocabItems,
+            targetLanguage: targetLang,
+            sourceLanguage: deckRef.current?.source_language || 'English',
+            contextLanguage: deckRef.current?.context_language || 'target',
+          }, regenFields)
           if (genRes?.cards?.length) { lastErr = null; break }
           lastErr = new Error('No cards returned')
-        } catch (e) {
-          lastErr = e
-        }
+        } catch (e) { lastErr = e }
       }
-
-      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
 
       if (lastErr || !genRes?.cards?.length) {
-        console.error(`Regen batch ${i + 1} failed:`, lastErr?.message)
-        failedBatchNums.push(i + 1)
-        anyFailed = true
-        updateRegenBar(batchCeil)
-        setRegenMsg(`Batch ${i + 1} failed — continuing…`)
-        continue
+        console.error(`Regen batch ${batchIdx + 1} failed:`, lastErr?.message)
+        failedBatchNums.push(batchIdx + 1)
+        return
       }
 
-      // Build patches — match by position, skip cards with no new data
-      setRegenMsg(`Batch ${i + 1} / ${batches.length} — saving…`)
       const changedKeys = regenFields.flatMap(f => {
         const keys = [f.key]
         const ph = f.phonetics
@@ -338,50 +301,74 @@ export default function BlueprintPage() {
         return keys
       })
 
-      const patches = []
-      genRes.cards
-        .filter(c => !c._error)
-        .forEach((genCard, idx) => {
-          const card = batchCards[idx]
-          if (!card) return
-          const fieldData = {}
-          changedKeys.forEach(k => {
-            if (k in genCard && k !== 'word' && genCard[k] !== '') fieldData[k] = genCard[k]
-          })
-          // Validate: must have filled at least one regen field
-          const hasData = regenFields.some(f => fieldData[f.key])
-          if (hasData) patches.push({ id: card.id, word: card.word, fields: fieldData })
+      genRes.cards.filter(c => !c._error).forEach((genCard, idx) => {
+        const card = batchCards[idx]
+        if (!card) return
+        const fieldData = {}
+        changedKeys.forEach(k => {
+          if (k in genCard && k !== 'word' && genCard[k] !== '') fieldData[k] = genCard[k]
         })
-
-      if (patches.length > 0) {
-        try {
-          await api.patchCards(deckId, patches)
-          totalPatched += patches.length
-        } catch (e) {
-          console.error(`Patch batch ${i + 1} failed:`, e)
-          failedBatchNums.push(i + 1)
-          anyFailed = true
+        if (regenFields.some(f => fieldData[f.key])) {
+          allPatches.push({ id: card.id, word: card.word, fields: fieldData })
         }
-      }
+      })
+    }
 
-      updateRegenBar(batchCeil)
-      setRegenMsg(`${totalPatched} cards updated…`)
+    // Run batches 2 at a time (parallel) — doubles throughput within rate limit
+    const CONCURRENCY = 2
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      const chunk = batches.slice(i, i + CONCURRENCY)
+      const startBatchIdx = i
+
+      // Animate progress bar across this chunk
+      const chunkStart = (i / batches.length) * 90 // reserve last 10% for saving
+      const chunkEnd   = (Math.min(i + CONCURRENCY, batches.length) / batches.length) * 90
+      const startTime  = performance.now()
+      const ESTIMATE   = 12000 // slightly longer — two batches in parallel
+
+      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
+      const tickRegen = () => {
+        const t = Math.min((performance.now() - startTime) / ESTIMATE, 0.9)
+        updateRegenBar(chunkStart + (chunkEnd - chunkStart) * t)
+        if (t < 0.9) regenRafRef.current = requestAnimationFrame(tickRegen)
+      }
+      regenRafRef.current = requestAnimationFrame(tickRegen)
+      setRegenMsg(`Batches ${startBatchIdx + 1}–${Math.min(startBatchIdx + CONCURRENCY, batches.length)} / ${batches.length} — generating…`)
+
+      await Promise.all(chunk.map((batchCards, j) => processBatch(startBatchIdx + j, batchCards)))
+
+      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
+      completedBatches += chunk.length
+      updateRegenBar((completedBatches / batches.length) * 90)
+    }
+
+    // Saving phase — the last 10% of the bar
+    if (allPatches.length > 0) {
+      setRegenMsg(`Saving ${allPatches.length} card${allPatches.length !== 1 ? 's' : ''}…`)
+      updateRegenBar(90)
+      try {
+        await api.patchCards(deckId, allPatches)
+        totalPatched = allPatches.length
+      } catch (e) {
+        console.error('Regen patch failed:', e)
+        failedBatchNums.push('save')
+      }
     }
 
     qc.invalidateQueries({ queryKey: ['cards', deckId] })
+    updateRegenBar(100)
 
+    const anyFailed = failedBatchNums.length > 0
     if (anyFailed) {
       originalBlueprintRef.current = oldFields
       setRegenState('error')
-      const failedStr = failedBatchNums.join(', ')
-      setRegenMsg(`${totalPatched} cards updated. Batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedStr} failed — save again to retry.`)
-      toast.error(`Some card updates failed (batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedStr}). Save blueprint again to retry.`)
+      setRegenMsg(`${totalPatched} cards updated. Failures: batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedBatchNums.join(', ')} — save again to retry.`)
+      toast.error(`Some card updates failed. Save the blueprint again to retry.`)
     } else {
       originalBlueprintRef.current = savedFields
       setRegenState('done')
       setRegenMsg(`${totalPatched} card${totalPatched !== 1 ? 's' : ''} refreshed`)
     }
-    updateRegenBar(100)
   }
 
   const allCardsRef = useRef([])
@@ -460,70 +447,72 @@ export default function BlueprintPage() {
           setProgressMsg(`Starting — ${batches.length} batch${batches.length !== 1 ? 'es' : ''}`)
 
           let allGeneratedCards = []
-          let failedBatches = 0
+          let failedBatchCount = 0
 
-          for (let i = 0; i < batches.length; i++) {
-            progress.startBatch(i)
-            setProgressMsg(`Batch ${i + 1} / ${batches.length}`)
-
-            // Exponential backoff retry per batch
+          // Helper: fetch one batch with independent exponential backoff retry
+          const fetchBatch = async (batchIdx) => {
+            const MAX_RETRIES = 4
             let genRes = null
             let lastErr = null
-            const MAX_RETRIES = 4
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
               if (attempt > 0) {
                 const delay = 1500 * Math.pow(2, attempt - 1)
-                setProgressMsg(`Batch ${i + 1} / ${batches.length} — retry ${attempt}/${MAX_RETRIES} (${Math.round(delay / 1000)}s)…`)
                 await new Promise(r => setTimeout(r, delay))
               }
               try {
-                genRes = await api.generateCards(
-                  deckId,
-                  {
-                    vocab: batches[i],
-                    targetLanguage: deckRef.current?.target_language || 'Korean',
-                    sourceLanguage: deckRef.current?.source_language || 'English',
-                    contextLanguage: deckRef.current?.context_language || 'target',
-                  },
-                  fieldsRef.current || []
-                )
+                genRes = await api.generateCards(deckId, {
+                  vocab: batches[batchIdx],
+                  targetLanguage: deckRef.current?.target_language || deck?.target_language || '',
+                  sourceLanguage: deckRef.current?.source_language || 'English',
+                  contextLanguage: deckRef.current?.context_language || 'target',
+                }, fieldsRef.current || [])
                 if (genRes?.cards?.length) { lastErr = null; break }
                 lastErr = new Error('No cards returned from API')
-              } catch (e) {
-                lastErr = e
+              } catch (e) { lastErr = e }
+            }
+            return { batchIdx, genRes, lastErr }
+          }
+
+          // Validate cards from a batch result
+          const requiredKeys = (fieldsRef.current || []).map(f => f.key).filter(k => !MANDATORY_FIELD_KEYS.includes(k))
+          const validateCards = (cards) => cards.filter(c => {
+            if (c._error || !c.word) return false
+            if (requiredKeys.length === 0) return true
+            return requiredKeys.some(k => c[k] && c[k] !== '')
+          })
+
+          // Run 2 batches in parallel — doubles throughput within rate limit
+          const CONCURRENCY = 2
+          for (let i = 0; i < batches.length; i += CONCURRENCY) {
+            const chunkIndices = []
+            for (let j = i; j < Math.min(i + CONCURRENCY, batches.length); j++) chunkIndices.push(j)
+
+            progress.startBatch(i)  // animate bar for the first in chunk
+            setProgressMsg(`Batch${chunkIndices.length > 1 ? 'es' : ''} ${chunkIndices.map(x => x + 1).join(' & ')} / ${batches.length}`)
+
+            const results = await Promise.all(chunkIndices.map(idx => fetchBatch(idx)))
+
+            for (const { batchIdx, genRes, lastErr } of results) {
+              if (lastErr || !genRes?.cards?.length) {
+                const msg = lastErr?.message || 'No cards returned'
+                toast.error(`Batch ${batchIdx + 1} failed: ${msg}`)
+                failedBatchCount++
+                continue
               }
+              allGeneratedCards.push(...validateCards(genRes.cards))
             }
-
-            if (lastErr || !genRes?.cards?.length) {
-              const msg = lastErr?.message || 'No cards returned'
-              toast.error(`Batch ${i + 1} failed: ${msg}`)
-              setProgressMsg(`Batch ${i + 1} / ${batches.length} — failed`)
-              progress.completeBatch(i)
-              failedBatches++
-              continue
-            }
-
-            // Validate cards — filter out error stubs and cards missing ALL blueprint fields
-            const requiredKeys = (fieldsRef.current || []).map(f => f.key).filter(k => !MANDATORY_FIELD_KEYS.includes(k))
-            const validCards = genRes.cards.filter(c => {
-              if (c._error || !c.word) return false
-              // Keep card if at least one non-mandatory blueprint field has a value
-              if (requiredKeys.length === 0) return true
-              return requiredKeys.some(k => c[k] && c[k] !== '')
-            })
 
             progress.completeBatch(i)
-            allGeneratedCards.push(...validCards)
-            setProgressMsg(`Batch ${i + 1} / ${batches.length} — ${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated`)
+            setProgressMsg(`${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated (batch ${Math.min(i + CONCURRENCY, batches.length)} / ${batches.length})`)
           }
 
           if (!allGeneratedCards.length) {
-            setImportError(failedBatches > 0 ? `All ${failedBatches} batch${failedBatches !== 1 ? 'es' : ''} failed — check your connection and try again` : 'No valid cards generated')
+            setImportError(failedBatchCount > 0 ? `All ${failedBatchCount} batch${failedBatchCount !== 1 ? 'es' : ''} failed — check your connection and try again` : 'No valid cards generated')
             setImportState('error')
             return
           }
 
-          // ── Saving phase ─────────────────────────────────────
+          // ── Saving phase — update progress bar for this step ──
           setProgressMsg(`Saving ${allGeneratedCards.length} cards…`)
 
           // ── Detect homographs ──────────────────────────────
@@ -1330,7 +1319,7 @@ function ManualCardForm({ deckId, fields, onSaved }) {
           {f.field_type === 'example' ? (
             <textarea className="input text-sm resize-none" rows={2} value={fieldValues[f.key] || ''}
               onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
-              placeholder="e.g. 나는 {{사랑}}해." />
+              placeholder="e.g. She {{loves}} him. ;;; Their {{love}} is eternal." />
           ) : (
             <input className="input text-sm" value={fieldValues[f.key] || ''}
               onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
