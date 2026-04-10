@@ -1,303 +1,221 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
-import { useAppStore } from '../store/appStore'
-import { useToast } from '../components/shared/Toast'
-import Modal from '../components/shared/Modal'
-import { DeckStatsBar } from '../components/shared/StatsBar'
-import { useDeckStats } from '../hooks/useDeckStats'
-import { getLanguageFlag, LANGUAGES } from '../lib/utils'
+import { requireUser, json, error, handleCors } from './_db.js'
 
-export default function DeckSelect() {
-  const navigate = useNavigate()
-  const qc = useQueryClient()
-  const { activeDeckId, setActiveDeckId, settings } = useAppStore()
-  const toast = useToast()
-  const [modal, setModal] = useState(null)
-  const defaultSource = settings.defaultSourceLanguage || 'English'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
 
-  const { data: decks = [], isLoading } = useQuery({
-    queryKey: ['decks'],
-    queryFn: api.getDecks,
-  })
+// Strict JSON repair — strip markdown fences, fix common truncation
+function cleanAndParse(text) {
+  let cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
+  // Sometimes Gemini truncates — try to close the array
+  if (!cleaned.endsWith(']')) {
+    const lastBrace = cleaned.lastIndexOf('}')
+    const lastComma = cleaned.lastIndexOf(',')
+    if (lastBrace > lastComma) cleaned = cleaned.slice(0, lastBrace + 1) + ']'
+    else if (lastComma > 0)   cleaned = cleaned.slice(0, lastComma) + ']'
+    else                      cleaned += ']'
+  }
+  return JSON.parse(cleaned)
+}
 
-  const createMutation = useMutation({
-    mutationFn: api.createDeck,
-    onSuccess: (deck) => {
-      qc.invalidateQueries({ queryKey: ['decks'] })
-      setActiveDeckId(deck.id)
-      setModal(null)
-      toast.success(`"${deck.name}" created!`)
-      navigate(`/deck/${deck.id}/blueprint`)
-    },
-    onError: (e) => toast.error(e.message),
-  })
+// Strip sense hints appended by regen ("word (sense)") from the word field
+function stripSenseHint(word) {
+  if (!word) return word
+  const m = word.match(/^(.+?)\s*\([^)]+\)$/)
+  return m ? m[1].trim() : word.trim()
+}
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => api.updateDeck(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['decks'] })
-      setModal(null)
-      toast.success('Deck updated.')
-    },
-    onError: (e) => toast.error(e.message),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: api.deleteDeck,
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['decks'] })
-      if (activeDeckId === id) setActiveDeckId(null)
-      toast.success('Deck deleted.')
-    },
-    onError: (e) => toast.error(e.message),
-  })
-
-  const handleSelect = (deck) => {
-    setActiveDeckId(deck.id)
-    navigate(`/deck/${deck.id}/study/learn`)
+function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
+  function getPhoneticKeys(ph) {
+    if (!ph) return []
+    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+    const keys = []
+    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+    return keys
   }
 
-  const handleDelete = (deck, e) => {
-    e.stopPropagation()
-    if (!window.confirm(`Delete "${deck.name}" and all its cards? This cannot be undone.`)) return
-    deleteMutation.mutate(deck.id)
+  const PHONETIC_DESCRIPTIONS = (fieldKey) => ({
+    furigana:              `"${fieldKey}_furigana": hiragana/katakana above each kanji, formatted as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"`,
+    romaji:                `"${fieldKey}_romaji": Hepburn romanisation`,
+    pinyin:                `"${fieldKey}_pinyin": Pīnyīn with tone marks`,
+    bopomofo:              `"${fieldKey}_bopomofo": Zhùyīn Fúhào symbols (ㄅㄆㄇ)`,
+    jyutping:              `"${fieldKey}_jyutping": Jyutping romanisation for Cantonese`,
+    hangulRomanisation:    `"${fieldKey}_hangulRomanisation": Revised Romanisation of Korean`,
+    cantoneseRomanisation: `"${fieldKey}_cantoneseRomanisation": Yale Cantonese romanisation`,
+    romanisation:          `"${fieldKey}_romanisation": standard Latin-script transliteration`,
+    cyrillicTranslit:      `"${fieldKey}_cyrillicTranslit": Latin transliteration of Cyrillic`,
+    tones:                 `"${fieldKey}_tones": tonal representation (numbered or marked)`,
+    diacritics:            `"${fieldKey}_diacritics": full vowel-marked version (tashkeel, nikud, etc.)`,
+    ipa:                   `"${fieldKey}_ipa": IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/`,
+    english:               `"${fieldKey}_english": concise English gloss or translation`,
+  })
+
+  const fieldLines = blueprint.map(f => {
+    const lines = [`  - "${f.key}": ${f.description || f.label}`]
+    if (f.key === 'source_translation') {
+      lines.push(`    CRITICAL: ONE clean word in ${sourceLanguage}. No slashes, no alternatives. Match the specific meaning.`)
+    }
+    if (f.key === 'context') {
+      const ctxLang = contextLanguage === 'source' ? sourceLanguage : targetLanguage
+      lines.push(`    Write in ${ctxLang}. Very brief (2-5 words), disambiguates this meaning. Leave "" if unambiguous.`)
+    }
+    if (f.field_type === 'example') {
+      lines.push(`    Generate 3 varied sentences separated by " ;;; ". Wrap ONLY the target word with {{word}}.`)
+      lines.push(`    Example format: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
+    }
+    const keys = getPhoneticKeys(f.phonetics)
+    const descs = PHONETIC_DESCRIPTIONS(f.key)
+    keys.forEach(pk => { if (descs[pk]) lines.push(`  - ${descs[pk]}`) })
+    return lines.join('\n')
+  }).join('\n')
+
+  const exampleKeys = ['word', '_meanings', '_sense']
+  blueprint.forEach(f => {
+    exampleKeys.push(f.key)
+    getPhoneticKeys(f.phonetics).forEach(pk => exampleKeys.push(`${f.key}_${pk}`))
+  })
+
+  // Strip any "(sense)" hints — the prompt always receives clean words
+  const cleanVocab = vocabBatch.map(v => stripSenseHint(v))
+
+  return `You are a language learning assistant generating flashcard data.
+
+Target language: ${targetLanguage}
+Source language: ${sourceLanguage}
+
+HOMOGRAPH RULE — CRITICAL:
+A homograph is a word with multiple distinct, unrelated meanings. Examples:
+- French "café" → "coffee" (beverage) AND "café" (establishment) AND "brown" (colour) → 3 separate objects
+- English "bank" → "financial institution" AND "river bank" → 2 separate objects
+
+Rules for homographs:
+- Consider ALL common everyday meanings across ALL semantic domains.
+- Output ONE separate JSON object per distinct meaning. Never combine meanings.
+- Each object must have "_meanings": <total count of distinct meanings> and "_sense": "<very brief source-language label, e.g. 'beverage', 'colour', 'place'>".
+- CRITICAL: Every field in a given object must match ONLY that object's "_sense". Never mix data from different meanings across objects.
+- If a word has only one meaning, set "_meanings": 1 and "_sense": "".
+
+For each vocabulary item (or each meaning if a homograph), generate a JSON object with:
+  - "word": the vocabulary item EXACTLY as given — no extra text, no parentheses
+  - "_meanings": integer
+  - "_sense": string (empty if only one meaning)
+${fieldLines}
+
+Rules:
+- Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
+- CRITICAL: Fill EVERY field. Do NOT leave any field empty or as "". Use a best approximation if uncertain.
+- Process EVERY word — output array must have at least as many objects as the input list.
+- "word" must match the input word EXACTLY.
+- "context" must be written in ${contextLanguage === 'source' ? sourceLanguage : targetLanguage}. Keep it very brief (2–5 words). Leave "" only if the word is completely unambiguous.
+
+Expected output keys: ${exampleKeys.join(', ')}
+
+Now generate for: ${JSON.stringify(cleanVocab)}`
+}
+
+export const handler = async (event) => {
+  const cors = handleCors(event)
+  if (cors) return cors
+  try {
+    const userId = requireUser(event)
+    if (event.httpMethod !== 'POST') return error('Method not allowed', 405)
+
+    const { vocab, blueprint } = JSON.parse(event.body)
+    if (!vocab?.vocab || !blueprint) return error('vocab and blueprint required')
+
+    const vocabArray      = vocab.vocab
+    const targetLanguage  = vocab.targetLanguage  || ''
+    const sourceLanguage  = vocab.sourceLanguage  || 'English'
+    const contextLanguage = vocab.contextLanguage || 'target'
+
+    const apiKey = process.env.GEMINI_API_KEY
+    if (!apiKey) return error('Gemini API key not configured', 500)
+
+    const MAX_ATTEMPTS = 5
+    const BASE_DELAY_MS = 1500
+    let lastError = null
+    let parseFailures = 0  // Track parse failures to escalate prompt strictness
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1)
+        console.log(`Gemini retry ${attempt}/${MAX_ATTEMPTS - 1} in ${delay}ms — previous error: ${lastError}`)
+        await new Promise(r => setTimeout(r, delay))
+      }
+
+      // Lower temperature on every attempt — start strict, get stricter on parse failures
+      const temperature = attempt === 0 ? 0.1 : Math.max(0, 0.08 - attempt * 0.02)
+
+      // On parse failures, rebuild prompt with extra JSON strictness instruction
+      const prompt = parseFailures > 0
+        ? buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
+            + '\n\nCRITICAL: Your previous response failed JSON parsing. Output ONLY the raw JSON array. Absolutely no text before or after the array. No markdown. No explanation. Start your response with [ and end with ].'
+        : buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
+
+      let geminiRes
+      try {
+        geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature,
+              maxOutputTokens: 8192,
+              responseMimeType: 'application/json',
+            },
+          }),
+        })
+      } catch (fetchErr) {
+        lastError = `Network error: ${fetchErr.message}`
+        continue
+      }
+
+      if (!geminiRes.ok) {
+        const retryable = geminiRes.status === 503 || geminiRes.status === 429 || geminiRes.status >= 500
+        let errBody = ''
+        try { errBody = await geminiRes.text() } catch {}
+        lastError = `HTTP ${geminiRes.status}: ${errBody.slice(0, 200)}`
+        console.error(`Gemini ${geminiRes.status} (attempt ${attempt + 1}):`, errBody.slice(0, 400))
+        if (!retryable) return error(`Gemini error ${geminiRes.status}: ${errBody.slice(0, 200)}`, 502)
+        continue
+      }
+
+      let geminiData
+      try { geminiData = await geminiRes.json() }
+      catch (e) { lastError = `Response JSON parse: ${e.message}`; parseFailures++; continue }
+
+      const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!text) {
+        const reason = geminiData.candidates?.[0]?.finishReason || 'unknown'
+        lastError = `Empty response (finishReason: ${reason})`
+        console.error('No text from Gemini:', JSON.stringify(geminiData).slice(0, 300))
+        continue
+      }
+
+      try {
+        const parsed = cleanAndParse(text)
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          lastError = 'Output is not a non-empty array'
+          parseFailures++
+          continue
+        }
+        // Normalise word fields — strip any "(sense)" Gemini may have added
+        const cards = parsed.map(c => ({ ...c, word: stripSenseHint(c.word) }))
+        return json({ cards })
+      } catch (parseErr) {
+        lastError = `JSON parse: ${parseErr.message} (output: ${text.slice(0, 200)})`
+        parseFailures++
+        console.error(`Parse failed (attempt ${attempt + 1}):`, text.slice(0, 400))
+        continue
+      }
+    }
+
+    console.error(`All ${MAX_ATTEMPTS} attempts failed. Last: ${lastError}`)
+    return error(`Gemini failed after ${MAX_ATTEMPTS} attempts: ${lastError}`, 502)
+
+  } catch (e) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401)
+    console.error(e)
+    return error(e.message, 500)
   }
-
-  return (
-    <div className="max-w-4xl mx-auto px-6 py-10">
-      <div className="flex items-end justify-between mb-8">
-        <div>
-          <div className="section-title mb-1">Your Library</div>
-          <h1 className="font-display text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>Decks</h1>
-        </div>
-        <button className="btn-primary flex items-center gap-2" onClick={() => setModal('create')}>
-          + New Deck
-        </button>
-      </div>
-
-      {isLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map(i => <div key={i} className="h-44 rounded-2xl shimmer" />)}
-        </div>
-      ) : decks.length === 0 ? (
-        <EmptyState onCreate={() => setModal('create')} />
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
-          {decks.map(deck => (
-            <DeckCard
-              key={deck.id}
-              deck={deck}
-              isActive={deck.id === activeDeckId}
-              onSelect={() => handleSelect(deck)}
-              onEdit={(e) => { e.stopPropagation(); setModal(deck) }}
-              onDelete={(e) => handleDelete(deck, e)}
-            />
-          ))}
-          <button
-            className="h-44 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all hover:border-purple-500 hover:bg-white/[0.02]"
-            style={{ borderColor: 'var(--border)' }}
-            onClick={() => setModal('create')}>
-            <span className="text-3xl" style={{ color: 'var(--text-muted)' }}>+</span>
-            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>New Deck</span>
-          </button>
-        </div>
-      )}
-
-      {modal && (
-        <DeckFormModal
-          deck={modal === 'create' ? null : modal}
-          defaultSource={defaultSource}
-          onClose={() => setModal(null)}
-          onSave={(data) => {
-            if (modal === 'create') createMutation.mutate(data)
-            else updateMutation.mutate({ id: modal.id, data })
-          }}
-          saving={createMutation.isPending || updateMutation.isPending}
-        />
-      )}
-    </div>
-  )
-}
-
-function DeckCard({ deck, isActive, onSelect, onEdit, onDelete }) {
-  const { stats } = useDeckStats(deck.id)
-  const flag = getLanguageFlag(deck.target_language)
-
-  return (
-    <div
-      className="card p-5 cursor-pointer group relative transition-all duration-200 hover:translate-y-[-2px]"
-      style={{ borderColor: isActive ? 'var(--accent-primary)' : undefined, boxShadow: isActive ? '0 0 0 1px var(--accent-primary)' : undefined }}
-      onClick={onSelect}>
-      {isActive && (
-        <span className="absolute top-3 right-3 text-xs px-2 py-0.5 rounded-full font-medium"
-          style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)' }}>Active</span>
-      )}
-      <div className="text-3xl mb-3">{flag}</div>
-      <div className="font-display font-semibold text-base leading-tight mb-1" style={{ color: 'var(--text-primary)' }}>
-        {deck.name}
-      </div>
-      <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
-        {deck.source_language || 'English'} → {deck.target_language}
-      </div>
-      {deck.description && (
-        <div className="text-xs mb-3 truncate" style={{ color: 'var(--text-muted)' }}>{deck.description}</div>
-      )}
-      {stats.total > 0 ? (
-        <div className="mt-3">
-          <DeckStatsBar stats={stats} />
-          {stats.due > 0 && (
-            <div className="text-xs mt-1.5" style={{ color: 'var(--accent-danger)' }}>
-              {stats.due} card{stats.due !== 1 ? 's' : ''} due
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>No cards yet</div>
-      )}
-      <div className="absolute bottom-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-        <button className="btn-ghost p-1.5 text-xs" onClick={onEdit}>✏</button>
-        <button className="btn-ghost p-1.5 text-xs" style={{ color: 'var(--accent-danger)' }} onClick={onDelete}>✕</button>
-      </div>
-    </div>
-  )
-}
-
-function EmptyState({ onCreate }) {
-  return (
-    <div className="text-center py-20">
-      <div className="text-5xl mb-4">📖</div>
-      <div className="font-display text-xl font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>No decks yet</div>
-      <div className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>Create your first deck, configure a blueprint, and start learning.</div>
-      <button className="btn-primary" onClick={onCreate}>Create your first deck</button>
-    </div>
-  )
-}
-
-function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
-  const [form, setForm] = useState(
-    deck
-      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto', context_language: deck.context_language || 'target', strict_accents: deck.strict_accents !== false, strict_mode: deck.strict_mode === true }
-      : { name: '', target_language: 'Korean', source_language: defaultSource || 'English', description: '', card_front_field: 'auto', context_language: 'target', strict_accents: true, strict_mode: false }
-  )
-
-  const isEdit = !!deck
-  const targetFlag = getLanguageFlag(form.target_language)
-  const sourceFlag = getLanguageFlag(form.source_language)
-
-  return (
-    <Modal title={isEdit ? 'Edit Deck' : 'New Deck'} onClose={onClose}>
-      <div className="space-y-4">
-        <div>
-          <label className="section-title block mb-1.5">Deck Name</label>
-          <input className="input" value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            placeholder="e.g. Korean Vocabulary" autoFocus />
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Source Language (you know this)</label>
-          <div className="flex gap-2">
-            <span className="text-2xl flex items-center">{sourceFlag}</span>
-            <select className="input flex-1" value={form.source_language}
-              onChange={e => setForm(f => ({ ...f, source_language: e.target.value }))}>
-              {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Target Language (you're learning this)</label>
-          <div className="flex gap-2">
-            <span className="text-2xl flex items-center">{targetFlag}</span>
-            <select className="input flex-1" value={form.target_language}
-              onChange={e => setForm(f => ({ ...f, target_language: e.target.value }))}>
-              {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Description <span style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-          <input className="input" value={form.description}
-            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-            placeholder="What is this deck for?" />
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Card front shows</label>
-          <select className="input" value={form.card_front_field}
-            onChange={e => setForm(f => ({ ...f, card_front_field: e.target.value }))}>
-            <option value="auto">Auto (word only)</option>
-            <option value="word+hint">Word + first show_on_front field</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Context on card front (Target → Source)</label>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { v: 'target', label: 'Context field', desc: 'Short grammatical hint in target language (e.g. 명사, 단수)' },
-              { v: 'cloze',  label: 'Cloze sentence', desc: 'Example sentence with the word blanked out' },
-            ].map(({ v, label, desc }) => (
-              <button key={v} type="button"
-                className="flex flex-col items-start p-3 rounded-xl border transition-all text-left"
-                style={{ borderColor: form.context_language === v ? 'var(--accent-primary)' : 'var(--border)', background: form.context_language === v ? 'var(--accent-glow)' : 'transparent' }}
-                onClick={() => setForm(f => ({ ...f, context_language: v }))}>
-                <span className="text-xs font-medium" style={{ color: form.context_language === v ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{label}</span>
-                <span className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{desc}</span>
-              </button>
-            ))}
-          </div>
-          <div className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
-            Helps distinguish homographs like 눈 (eye vs snow) when shown the target word.
-          </div>
-        </div>
-
-        <div>
-          <label className="section-title block mb-1.5">Typing settings</label>
-          <div className="space-y-2">
-            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer"
-              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-              <div>
-                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Strict accents</div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Require correct accent marks (é ≠ e)</div>
-              </div>
-              <ToggleSwitch value={form.strict_accents} onChange={v => setForm(f => ({ ...f, strict_accents: v }))} />
-            </label>
-            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer"
-              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-              <div>
-                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Strict mode</div>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Exact spelling required — no typo tolerance</div>
-              </div>
-              <ToggleSwitch value={form.strict_mode} onChange={v => setForm(f => ({ ...f, strict_mode: v }))} />
-            </label>
-          </div>
-        </div>
-
-        <div className="flex gap-3 pt-2">
-          <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-primary flex-1"
-            disabled={!form.name.trim() || saving}
-            onClick={() => onSave(form)}>
-            {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Deck →'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
-function ToggleSwitch({ value, onChange }) {
-  return (
-    <button role="switch" aria-checked={value} type="button"
-      className="w-11 h-6 rounded-full transition-colors relative flex-shrink-0"
-      style={{ background: value ? 'var(--accent-primary)' : 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-      onClick={() => onChange(!value)}>
-      <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-        style={{ left: value ? '24px' : '3px' }} />
-    </button>
-  )
 }
