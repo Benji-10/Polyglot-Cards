@@ -83,8 +83,11 @@ export default function SettingsPage() {
         <SettingRow label="Strict accents" desc="Require correct accent marks when typing (é ≠ e)">
           <Toggle value={settings.strictAccents ?? true} onChange={v => updateSettings({ strictAccents: v })} />
         </SettingRow>
+        <SettingRow label="Strict mode" desc="Exact spelling only — no typo tolerance">
+          <Toggle value={settings.strictMode ?? false} onChange={v => updateSettings({ strictMode: v })} />
+        </SettingRow>
         <SettingRow label="Animations" desc="Card flip and page transitions">
-          <Toggle value={settings.animationsEnabled} onChange={v => updateSettings({ animationsEnabled: v })} />
+          <Toggle value={settings.animationsEnabled !== false} onChange={v => updateSettings({ animationsEnabled: v })} />
         </SettingRow>
       </Section>
 
