@@ -117,7 +117,11 @@ export default function CollectionPage() {
 
     const dataRows = cardSubset.map(card => {
       const row = { word: card.word }
-      for (const k of allFieldKeys) row[k] = card.fields?.[k] ?? ''
+      for (const k of allFieldKeys) {
+        const v = card.fields?.[k]
+        // Serialize objects as JSON so they survive a round-trip through CSV
+        row[k] = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : v)
+      }
       row.srs_state     = card.srs_state     ?? ''
       row.last_reviewed = card.last_reviewed  ?? ''
       row.interval      = card.interval       ?? ''
@@ -151,7 +155,10 @@ export default function CollectionPage() {
       const q = search.toLowerCase()
       c = c.filter(card =>
         card.word.toLowerCase().includes(q) ||
-        Object.values(card.fields || {}).some(v => String(v).toLowerCase().includes(q))
+        Object.values(card.fields || {}).some(v => {
+          const text = v && typeof v === 'object' ? (v.text || '') : String(v || '')
+          return text.toLowerCase().includes(q)
+        })
       )
     }
     if (filter === 'new')       c = c.filter(x => x.srs_state === 'new' || !x.seen)
@@ -319,9 +326,13 @@ export default function CollectionPage() {
                       </td>
                       {previewFields.map(f => (
                         <td key={f.key} className="px-3 py-2.5 truncate" style={{ color: 'var(--text-secondary)' }}>
-                          {card.fields?.[f.key]
-                            ? <RubyText value={card.fields[f.key]} fieldKey={f.key} cardFields={card.fields} phonetics={f.phonetics || []} />
-                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          {(() => {
+                            const fv = card.fields?.[f.key]
+                            const hasContent = fv && (typeof fv === 'string' ? fv : fv.text)
+                            return hasContent
+                              ? <RubyText fieldValue={fv} phonetics={f.phonetics || []} />
+                              : <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          })()}
                         </td>
                       ))}
                       <td className="px-3 py-2.5">
@@ -403,17 +414,53 @@ function SortTh({ label, col, sortBy, sortDir, onSort }) {
 
 function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
   const [word, setWord] = useState(card.word)
-  const [fields, setFields] = useState({ ...card.fields })
+  // Normalise all field values: strings stay strings, objects stay objects
+  const [fields, setFields] = useState(() => ({ ...card.fields }))
 
-  // Normalise phonetics to {ruby, extras} shape regardless of stored format
-  const getPhoneticsList = (ph) => {
+  const getAnnotationKeys = (ph) => {
     if (!ph) return []
     if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
-    // New object shape
     const keys = []
     if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
     if (Array.isArray(ph.extras)) keys.push(...ph.extras)
     return keys
+  }
+
+  // Get the text portion of a field value (compat for old string shape)
+  const getText = (fk) => {
+    const v = fields[fk]
+    if (!v) return ''
+    return typeof v === 'object' ? (v.text || '') : v
+  }
+
+  // Get one annotation key from a field value object
+  const getAnnotation = (fk, ak) => {
+    const v = fields[fk]
+    if (!v || typeof v !== 'object') return ''
+    return v[ak] || ''
+  }
+
+  // Update the text portion of a field — preserves existing annotations
+  const setText = (fk, text, annotationKeys) => {
+    setFields(prev => {
+      const existing = prev[fk]
+      if (annotationKeys.length === 0) {
+        // No annotations — store as plain string
+        return { ...prev, [fk]: text }
+      }
+      // Has annotations — store as object, preserve existing annotation values
+      const obj = (existing && typeof existing === 'object') ? { ...existing } : {}
+      return { ...prev, [fk]: { ...obj, text } }
+    })
+  }
+
+  // Update one annotation key within a field object
+  const setAnnotation = (fk, ak, value) => {
+    setFields(prev => {
+      const existing = prev[fk]
+      const obj = (existing && typeof existing === 'object') ? { ...existing } : { text: '' }
+      return { ...prev, [fk]: { ...obj, [ak]: value } }
+    })
   }
 
   return (
@@ -423,49 +470,60 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
           <label className="section-title block mb-1.5">Word</label>
           <input className="input" value={word} onChange={e => setWord(e.target.value)} autoFocus />
         </div>
+
         {blueprint.map(f => {
-          const phoneticKeys = getPhoneticsList(f.phonetics)
+          const annotationKeys = getAnnotationKeys(f.phonetics)
+          const isExample = f.field_type === 'example'
+          const hasAnnotations = annotationKeys.length > 0
+
           return (
             <div key={f.key}>
-              <label className="section-title block mb-1.5">
-                {f.label}
-                {phoneticKeys.length > 0 && (
-                  <span className="ml-2 normal-case font-normal text-xs" style={{ color: 'var(--text-muted)' }}>
-                    + {phoneticKeys.join(', ')}
-                  </span>
-                )}
-              </label>
-              {f.field_type === 'example' ? (
+              <label className="section-title block mb-1.5">{f.label}</label>
+
+              {isExample ? (
                 <>
-                  <textarea className="input text-sm resize-none" rows={3} value={fields[f.key] || ''}
-                    onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Use {'{{word}}'} to mark cloze</div>
+                  <textarea className="input text-sm resize-none" rows={3}
+                    value={getText(f.key)}
+                    onChange={e => setText(f.key, e.target.value, annotationKeys)} />
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    Use {'{{word}}'} to mark cloze · Separate sentences with {' ;;; '}
+                  </div>
+                  {/* Annotation lines for example fields */}
+                  {annotationKeys.map(ak => (
+                    <div key={ak} className="mt-1.5">
+                      <label className="section-title block mb-1">{ak}</label>
+                      <textarea className="input text-xs resize-none" rows={2}
+                        value={getAnnotation(f.key, ak)}
+                        onChange={e => setAnnotation(f.key, ak, e.target.value)}
+                        placeholder={`${ak} version of the sentences, same order, separated by  ;;; `} />
+                    </div>
+                  ))}
                 </>
               ) : (
                 <>
-                  <input className="input text-sm" value={fields[f.key] || ''}
-                    onChange={e => setFields(v => ({ ...v, [f.key]: e.target.value }))} />
-                  {/* Phonetic sub-fields */}
-                  {phoneticKeys.map(pk => {
-                    const subKey = `${f.key}_${pk}`
-                    return (
-                      <div key={subKey} className="mt-1.5">
-                        <label className="section-title block mb-1">{pk}</label>
-                        <input className="input text-xs" value={fields[subKey] || ''}
-                          onChange={e => setFields(v => ({ ...v, [subKey]: e.target.value }))} />
-                      </div>
-                    )
-                  })}
+                  <input className="input text-sm"
+                    value={getText(f.key)}
+                    onChange={e => setText(f.key, e.target.value, annotationKeys)} />
+                  {/* Annotation sub-inputs */}
+                  {annotationKeys.map(ak => (
+                    <div key={ak} className="mt-1.5">
+                      <label className="section-title block mb-1">{ak}</label>
+                      <input className="input text-xs"
+                        value={getAnnotation(f.key, ak)}
+                        onChange={e => setAnnotation(f.key, ak, e.target.value)} />
+                    </div>
+                  ))}
                 </>
               )}
             </div>
           )
         })}
+
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
           <button className="btn-primary flex-1" disabled={saving}
             onClick={() => onSave({ word, fields })}>
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>
