@@ -59,7 +59,7 @@ export default function StudyPage() {
     setSessionConfig(null)
     sessionModeRef.current = null
   }, [mode])
-@@ -287,91 +310,149 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const queue = useRef([])
   const [queueReady, setQueueReady] = useState(false)
   const [cardIdx, setCardIdx] = useState(0)
@@ -209,7 +209,7 @@ export default function StudyPage() {
 
   // Focus the active input whenever we enter the prompt phase.
   // When animations are off, focus immediately (no transition to wait for).
-@@ -453,77 +534,84 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   }
 
   const reveal = (result = null) => {
@@ -294,7 +294,7 @@ export default function StudyPage() {
     <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col" style={{ minHeight: 'calc(100vh - 60px)' }}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
-@@ -572,168 +660,149 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           overflow: 'hidden',
         }}>
           {config.interaction === 'passive' && (
@@ -444,7 +444,7 @@ export default function StudyPage() {
                     <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{lastResult.answer}</span>
                   </div>
                 </>
-@@ -764,94 +833,94 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 ))}
               </div>
             </div>
@@ -539,7 +539,7 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             {front.word}
           </div>
 
-@@ -883,119 +952,141 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
+function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             </div>
           )}
           {onFlip && (
@@ -681,7 +681,7 @@ function SessionComplete({ stats, total, mode, onEnd }) {
         {total === 0 ? 'All done!' : 'Session complete!'}
       </h2>
       <div className="text-sm mb-8" style={{ color: 'var(--text-muted)' }}>
-@@ -1031,108 +1122,121 @@ function SessionComplete({ stats, total, mode, onEnd }) {
+function SessionComplete({ stats, total, mode, onEnd }) {
 
 // ─────────────────────────────────────────────
 // ACCENT KEYBOARD HELPERS
