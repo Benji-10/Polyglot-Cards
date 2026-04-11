@@ -11,6 +11,29 @@ import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
 import RubyText from '../components/shared/RubyText'
 
+const fieldText = (value) => {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(v => v?.text).filter(Boolean).join(' ;;; ')
+  if (typeof value === 'object') return value.text || ''
+  return String(value)
+}
+
+const ROMANISATION_KEYS = ['romanisation', 'romaji', 'pinyin', 'jyutping', 'hangulRomanisation', 'cantoneseRomanisation', 'cyrillicTranslit']
+const DIACRITIC_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+const getDiacriticPresets = () => ([
+  { key: '1', label: '́', mark: '\u0301', group: 'accent' }, // acute
+  { key: '2', label: '̀', mark: '\u0300', group: 'accent' }, // grave
+  { key: '3', label: '̂', mark: '\u0302', group: 'accent' }, // circumflex
+  { key: '4', label: '̃', mark: '\u0303', group: 'accent' }, // tilde
+  { key: '5', label: '̈', mark: '\u0308', group: 'accent' }, // diaeresis
+  { key: '6', label: '̄', mark: '\u0304', group: 'accent' }, // macron
+  { key: '7', label: '̌', mark: '\u030C', group: 'accent' }, // caron
+  { key: '8', label: '̧', mark: '\u0327', group: 'hook' },   // cedilla
+  { key: '9', label: '̨', mark: '\u0328', group: 'hook' },   // ogonek
+  { key: '0', label: '̇', mark: '\u0307', group: 'dot' },    // dot above
+])
+
 // ─────────────────────────────────────────────
 // Card modes:
 //   direction:    'targetToSource' | 'sourceToTarget'
@@ -309,8 +332,66 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const clozeInputRef     = useRef(null)
   const continueButtonRef = useRef(null)
 
-  // Accent chars from target words — only show in sourceToTarget mode
-  const accentChars = useMemo(() => extractAccentChars(allCards), [allCards])
+  const typingAssist = useMemo(() => extractTypingAssist(allCards), [allCards])
+
+  const insertIntoInput = (input, setValue, text) => {
+    if (!input) { setValue(prev => prev + text); return }
+    const start = input.selectionStart ?? input.value.length
+    const end = input.selectionEnd ?? input.value.length
+    const next = input.value.slice(0, start) + text + input.value.slice(end)
+    setValue(next)
+    requestAnimationFrame(() => {
+      input.focus()
+      input.setSelectionRange(start + text.length, start + text.length)
+    })
+  }
+
+  const applyMarkToInput = (input, setValue, preset) => {
+    if (!input) return
+    const cursor = input.selectionStart ?? input.value.length
+    const next = applyCombiningMark(input.value, cursor, preset)
+    setValue(next.value)
+    requestAnimationFrame(() => {
+      input.focus()
+      input.setSelectionRange(next.cursor, next.cursor)
+    })
+  }
+
+  const romanisedCandidates = (card) => {
+    if (!deck?.allow_latin_typing) return []
+    const candidates = new Set()
+    const reading = card?.fields?.reading
+    const readText = fieldText(reading)
+    if (readText) candidates.add(readText)
+    if (card?.fields?._latin) candidates.add(String(card.fields._latin))
+    for (const v of Object.values(card?.fields || {})) {
+      if (Array.isArray(v)) {
+        v.forEach(it => {
+          Object.entries(it?.annotations || {}).forEach(([k, val]) => {
+            if (ROMANISATION_KEYS.includes(k) && val) candidates.add(String(val))
+          })
+        })
+      } else if (v && typeof v === 'object') {
+        Object.entries(v).forEach(([k, val]) => {
+          if (ROMANISATION_KEYS.includes(k) && val) candidates.add(String(val))
+        })
+      }
+    }
+    return Array.from(candidates)
+  }
+
+  const bestMatch = (input, expectedList) => {
+    let best = { correct: false, similarity: 0, exact: false }
+    let bestAnswer = expectedList[0] || ''
+    expectedList.forEach(ans => {
+      const r = fuzzyMatch(input, ans || '', { strictAccents, strictMode })
+      if (r.correct || r.similarity > best.similarity) {
+        best = r
+        bestAnswer = ans
+      }
+    })
+    return { ...best, answer: bestAnswer }
+  }
 
   const reviewMutation = useMutation({
     mutationFn: ({ cardId, rating }) => api.recordReview(cardId, rating),
@@ -349,7 +430,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const clozeData = useMemo(() => {
     if (config.interaction !== 'cloze' || !exampleField || !currentCard) return { hasCloze: false }
     const fieldVal = currentCard.fields?.[exampleField.key]
-    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    const raw = fieldText(fieldVal)
     return parseCloze(raw)
   }, [currentCard?.id, config.interaction, exampleField?.key]) // eslint-disable-line
 
@@ -475,16 +556,18 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const submitTyping = () => {
     if (!currentCard || phase !== 'prompt') return
     const expected = getAnswer(currentCard, config.direction, blueprint, deck)
-    const result = fuzzyMatch(typingAnswer, expected || '', { strictAccents, strictMode })
+    const expectedList = [expected, ...(config.direction === 'sourceToTarget' ? romanisedCandidates(currentCard) : [])].filter(Boolean)
+    const result = bestMatch(typingAnswer, expectedList)
     reveal({ ...result, answer: expected, typed: typingAnswer })
   }
 
   const submitCloze = () => {
     if (!currentCard || phase !== 'prompt') return
     const fieldVal = currentCard.fields?.[exampleField?.key]
-    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    const raw = fieldText(fieldVal)
     const clozeData = parseCloze(raw)
-    const result = fuzzyMatch(clozeAnswer, clozeData.answer || '', { strictAccents, strictMode })
+    const expectedList = [clozeData.answer, ...(config.direction === 'sourceToTarget' ? romanisedCandidates(currentCard) : [])].filter(Boolean)
+    const result = bestMatch(clozeAnswer, expectedList)
     reveal({ ...result, answer: clozeData.answer, typed: clozeAnswer })
   }
 
@@ -502,6 +585,11 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     onReveal: () => reveal(null),
     onAdvance: advanceActive,
     onRate: (r) => advance(r),
+    onDigit: (digit) => {
+      if (config.interaction !== 'multipleChoice' || phase !== 'prompt') return
+      const choice = choices[digit - 1]
+      if (choice !== undefined) submitChoice(choice)
+    },
     onExit: onEnd,
     enabled: !done,
   })
@@ -594,20 +682,10 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 onChange={e => setTypingAnswer(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && submitTyping()}
                 placeholder="Your answer..." data-accent-input="1" />
-              {accentChars.length > 0 && config.direction === 'sourceToTarget' && (
-                <AccentBar chars={accentChars} onInsert={ch => {
-                  const input = typingInputRef.current
-                  if (!input) { setTypingAnswer(prev => prev + ch); return }
-                  const start = input.selectionStart ?? input.value.length
-                  const end = input.selectionEnd ?? input.value.length
-                  const next = input.value.slice(0, start) + ch + input.value.slice(end)
-                  setTypingAnswer(next)
-                  // Restore cursor after React re-render
-                  requestAnimationFrame(() => {
-                    input.focus()
-                    input.setSelectionRange(start + ch.length, start + ch.length)
-                  })
-                }} />
+              {typingAssist && config.direction === 'sourceToTarget' && (
+                <AccentBar assist={typingAssist}
+                  onInsert={ch => insertIntoInput(typingInputRef.current, setTypingAnswer, ch)}
+                  onApplyMark={preset => applyMarkToInput(typingInputRef.current, setTypingAnswer, preset)} />
               )}
               <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
             </div>
@@ -621,7 +699,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'transparent' }}
                   onClick={() => submitChoice(choice)}>
                   <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {['A','B','C','D'][i]}
+                    {`${i + 1}. ${['A','B','C','D'][i]}`}
                   </span>
                   {choice}
                 </button>
@@ -665,19 +743,10 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   />
                   {clozeData.after}
                 </div>
-                {accentChars.length > 0 && config.direction === 'sourceToTarget' && (
-                  <AccentBar chars={accentChars} onInsert={ch => {
-                    const input = clozeInputRef.current
-                    if (!input) { setClozeAnswer(prev => prev + ch); return }
-                    const start = input.selectionStart ?? input.value.length
-                    const end = input.selectionEnd ?? input.value.length
-                    const next = input.value.slice(0, start) + ch + input.value.slice(end)
-                    setClozeAnswer(next)
-                    requestAnimationFrame(() => {
-                      input.focus()
-                      input.setSelectionRange(start + ch.length, start + ch.length)
-                    })
-                  }} />
+                {typingAssist && config.direction === 'sourceToTarget' && (
+                  <AccentBar assist={typingAssist}
+                    onInsert={ch => insertIntoInput(clozeInputRef.current, setClozeAnswer, ch)}
+                    onApplyMark={preset => applyMarkToInput(clozeInputRef.current, setClozeAnswer, preset)} />
                 )}
                 <button className="btn-primary mt-3 w-full" onClick={submitCloze}>Check</button>
               </div>
@@ -711,7 +780,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 return (
                   <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm"
                     style={{ borderColor, background: bg, color: 'var(--text-primary)' }}>
-                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A','B','C','D'][i]}</span>
+                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{`${i + 1}. ${['A','B','C','D'][i]}`}</span>
                     {choice}
                   </div>
                 )
@@ -786,7 +855,7 @@ function getFront(card, direction, blueprint, deck, exampleField) {
     let clozeSentence = null
     if (contextLanguage === 'cloze' && exampleField) {
       const fieldVal = card.fields?.[exampleField.key]
-      const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+      const raw = fieldText(fieldVal)
       if (raw) {
         const { before, answer, after, hasCloze } = parseCloze(raw)
         clozeSentence = hasCloze ? { before, answer, after } : null
@@ -808,7 +877,7 @@ function getFront(card, direction, blueprint, deck, exampleField) {
     || blueprint[0]
   const rawVal = srcField ? card.fields?.[srcField.key] : null
   // source_translation is always a plain string, but guard for object shape just in case
-  const val = rawVal && typeof rawVal === 'object' ? rawVal.text : rawVal
+  const val = fieldText(rawVal)
   return {
     word: val || card.word,
     label: deck?.source_language || 'Source',
@@ -829,7 +898,7 @@ function getAnswer(card, direction, blueprint, deck) {
       || blueprint[0]
     const raw = srcField ? card.fields?.[srcField.key] : null
     // Fields may be objects { text, ... } or plain strings
-    return raw && typeof raw === 'object' ? raw.text : (raw || card.word)
+    return fieldText(raw) || card.word
   }
   return card.word
 }
@@ -905,11 +974,11 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             {blueprint.map(field => {
               const value = backCard?.fields?.[field.key]
               // value may be a string (unannotated) or object { text, ... } (annotated/example)
-              const textVal = value && typeof value === 'object' ? value.text : value
+              const textVal = fieldText(value)
               if (!textVal) return null
               return (
                 <div key={field.key} className="flex gap-2 min-w-0">
-                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '80px' }}>{field.label}</span>
+                  <span className="section-title flex-shrink-0 mt-0.5 truncate" style={{ width: '110px' }} title={field.label}>{field.label}</span>
                   <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
                       ? <ExampleDisplay fieldValue={value} cardId={backCard?.id} />
@@ -940,7 +1009,26 @@ function PromptCard({ front, deck }) {
 }
 
 function ExampleDisplay({ fieldValue, cardId }) {
-  // fieldValue may be { text: "...", romanisation: "..." } or a plain string
+  const pickIndex = (count) => {
+    if (count <= 1) return 0
+    const seed = String(cardId || '')
+    let hash = 0
+    for (let i = 0; i < seed.length; i++) hash = ((hash << 5) - hash) + seed.charCodeAt(i)
+    return Math.abs(hash) % count
+  }
+
+  // Preferred shape: [{ text, annotations: { ... } }, ...]
+  if (Array.isArray(fieldValue)) {
+    const rows = fieldValue.filter(v => v && typeof v === 'object' && v.text)
+    const idx = pickIndex(rows.length)
+    const picked = rows[idx] || rows[0]
+    if (!picked) return null
+    const sentence = picked.text
+    const annotations = Object.entries(picked.annotations || {})
+    return renderExample(sentence, annotations)
+  }
+
+  // Legacy shape fallback
   const raw = fieldValue && typeof fieldValue === 'object' ? fieldValue.text : (fieldValue || '')
   const annotations = fieldValue && typeof fieldValue === 'object'
     ? Object.entries(fieldValue).filter(([k]) => k !== 'text')
@@ -948,11 +1036,18 @@ function ExampleDisplay({ fieldValue, cardId }) {
 
   // Pick a sentence index once per card — same index applies to all annotation lines
   const sentenceParts = raw.split(' ;;; ').map(s => s.trim()).filter(Boolean)
-  const idx = useMemo(() => Math.floor(Math.random() * Math.max(sentenceParts.length, 1)), [cardId]) // eslint-disable-line
+  const idx = pickIndex(sentenceParts.length)
   const sentence = sentenceParts[idx] || raw
 
-  const { before, answer, after, hasCloze } = parseCloze(sentence)
+  return renderExample(sentence, annotations.map(([key, annoRaw]) => [key, annoPartsFor(annoRaw, idx)]))
+}
 
+function annoPartsFor(annoRaw, idx) {
+  const annoParts = (annoRaw || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
+  return annoParts[idx] || annoRaw || ''
+}
+
+function renderExample(sentence, annotations) {
   const renderSentence = (text) => {
     const { before: b, answer: a, after: af, hasCloze: hc } = parseCloze(text)
     if (!hc) return <span>{text}</span>
@@ -966,14 +1061,10 @@ function ExampleDisplay({ fieldValue, cardId }) {
       </>
     )
   }
-
   return (
     <span style={{ color: 'var(--text-primary)', fontFamily: fontForText(sentence) }}>
       {renderSentence(sentence)}
-      {/* Show the matching annotation line (same index) below */}
-      {annotations.map(([key, annoRaw]) => {
-        const annoParts = (annoRaw || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
-        const annoSentence = annoParts[idx] || annoRaw || ''
+      {annotations.map(([key, annoSentence]) => {
         if (!annoSentence) return null
         return (
           <span key={key} className="block text-xs mt-1" style={{ color: 'var(--text-muted)', fontFamily: fontForText(annoSentence) }}>
@@ -1053,86 +1144,99 @@ function isLatinExtended(ch) {
   return false
 }
 
-/**
- * Scan target words (card.word) for accented Latin chars.
- * In sourceToTarget mode, users type the target word, so those are
- * the accents they need quick access to.
- * Returns up to 10 sorted by frequency. Returns [] for CJK/etc. decks.
- */
-function extractAccentChars(cards) {
+function extractTypingAssist(cards) {
   if (!cards?.length) return []
 
-  const freq = {}
+  const specialFreq = {}
   for (const card of cards) {
-    const text = card.word
+    const text = card?.word || ''
     if (!text || typeof text !== 'string') continue
     for (const ch of text) {
-      if (isLatinExtended(ch)) {
+      if (isLatinExtended(ch) && ch.normalize('NFD') === ch) {
         const lower = ch.toLowerCase()
-        freq[lower] = (freq[lower] || 0) + 1
+        specialFreq[lower] = (specialFreq[lower] || 0) + 1
       }
     }
   }
 
-  return Object.entries(freq)
+  const specialChars = Object.entries(specialFreq)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, 14)
     .map(([ch]) => ch)
+
+  return { diacritics: getDiacriticPresets(), specialChars }
 }
 
-const ACCENT_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+function applyCombiningMark(value, cursor, preset) {
+  const before = value.slice(0, cursor)
+  const after = value.slice(cursor)
+  const m = before.match(/([\s\S])([\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff]*)$/u)
+  if (!m) return { value, cursor }
+  const base = m[1]
+  const marks = Array.from(m[2] || '')
+  const start = before.length - (base + (m[2] || '')).length
+
+  const nextMarks = marks.filter(mark => {
+    const p = getDiacriticPresets().find(x => x.mark === mark)
+    return !p || p.group !== preset.group
+  })
+  if (!nextMarks.includes(preset.mark)) nextMarks.push(preset.mark)
+
+  const rebuilt = (base + nextMarks.join('')).normalize('NFC')
+  const nextValue = value.slice(0, start) + rebuilt + after
+  const nextCursor = start + rebuilt.length
+  return { value: nextValue, cursor: nextCursor }
+}
 
 /**
- * A row of up to 10 accent character buttons.
- * Clicking or pressing the corresponding number key inserts the character.
+ * Diacritics hotkeys (1-0) transform the previous character.
+ * Special chars are optional one-click inserts (e.g. þ, ð, ł).
  */
-function AccentBar({ chars, onInsert }) {
+function AccentBar({ assist, onInsert, onApplyMark }) {
   useEffect(() => {
-    if (!chars.length) return
+    if (!assist?.diacritics?.length) return
     const handler = (e) => {
-      // Don't fire when typing normally in inputs (only fire for digit keys)
       if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
-      const idx = ACCENT_KEYS.indexOf(e.key)
-      if (idx === -1 || idx >= chars.length) return
-      // Only intercept if target is our study input (has data-accent-input)
+      const idx = DIACRITIC_KEYS.indexOf(e.key)
+      if (idx === -1 || idx >= assist.diacritics.length) return
       if (!e.target.dataset.accentInput) return
       e.preventDefault()
-      onInsert(chars[idx])
+      onApplyMark(assist.diacritics[idx])
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [chars, onInsert])
+  }, [assist, onApplyMark])
 
-  if (!chars.length) return null
+  if (!assist) return null
 
   return (
-    <div className="flex gap-1 flex-wrap mt-2 justify-center">
-      {chars.map((ch, i) => (
-        <button
-          key={ch}
-          type="button"
-          tabIndex={-1}  // don't steal focus from input
-          onClick={() => onInsert(ch)}
-          className="flex flex-col items-center justify-center rounded-lg border transition-all"
-          style={{
-            width: '36px', height: '36px',
-            borderColor: 'var(--border)',
-            background: 'var(--bg-surface)',
-            color: 'var(--text-primary)',
-            fontSize: '14px',
-            position: 'relative',
-          }}
-          title={`Insert "${ch}" (press ${ACCENT_KEYS[i]})`}
-        >
-          {ch}
-          <span style={{
-            position: 'absolute', bottom: '1px', right: '3px',
-            fontSize: '8px', color: 'var(--text-muted)', lineHeight: 1,
-          }}>
-            {ACCENT_KEYS[i]}
-          </span>
-        </button>
-      ))}
+    <div className="space-y-1.5 mt-2">
+      <div className="flex gap-1 flex-wrap justify-center">
+        {assist.diacritics.map((d) => (
+          <button
+            key={d.key}
+            type="button"
+            tabIndex={-1}
+            onClick={() => onApplyMark(d)}
+            className="flex flex-col items-center justify-center rounded-lg border transition-all"
+            style={{ width: '36px', height: '36px', borderColor: 'var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', fontSize: '14px', position: 'relative' }}
+            title={`Apply ${d.label} to previous character (press ${d.key})`}>
+            ◌{d.label}
+            <span style={{ position: 'absolute', bottom: '1px', right: '3px', fontSize: '8px', color: 'var(--text-muted)', lineHeight: 1 }}>{d.key}</span>
+          </button>
+        ))}
+      </div>
+      {assist.specialChars?.length > 0 && (
+        <div className="flex gap-1 flex-wrap justify-center">
+          {assist.specialChars.map(ch => (
+            <button key={ch} type="button" tabIndex={-1} onClick={() => onInsert(ch)}
+              className="rounded-lg border px-2 py-1 text-sm"
+              style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
+              {ch}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
