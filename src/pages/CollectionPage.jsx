@@ -156,7 +156,11 @@ export default function CollectionPage() {
       c = c.filter(card =>
         card.word.toLowerCase().includes(q) ||
         Object.values(card.fields || {}).some(v => {
-          const text = v && typeof v === 'object' ? (v.text || '') : String(v || '')
+          const text = Array.isArray(v)
+            ? v.map(it => it?.text || '').join(' ;;; ')
+            : v && typeof v === 'object'
+              ? (v.text || '')
+              : String(v || '')
           return text.toLowerCase().includes(q)
         })
       )
@@ -430,12 +434,16 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
   const getText = (fk) => {
     const v = fields[fk]
     if (!v) return ''
+    if (Array.isArray(v)) return v.map(it => it?.text || '').filter(Boolean).join(' ;;; ')
     return typeof v === 'object' ? (v.text || '') : v
   }
 
   // Get one annotation key from a field value object
   const getAnnotation = (fk, ak) => {
     const v = fields[fk]
+    if (Array.isArray(v)) {
+      return v.map(it => it?.annotations?.[ak] || '').filter(Boolean).join(' ;;; ')
+    }
     if (!v || typeof v !== 'object') return ''
     return v[ak] || ''
   }
@@ -448,9 +456,17 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
         // No annotations — store as plain string
         return { ...prev, [fk]: text }
       }
-      // Has annotations — store as object, preserve existing annotation values
-      const obj = (existing && typeof existing === 'object') ? { ...existing } : {}
-      return { ...prev, [fk]: { ...obj, text } }
+      // Has annotations — canonical shape is [{ text, annotations }]
+      const first = Array.isArray(existing) && existing[0]
+        ? existing[0]
+        : (existing && typeof existing === 'object' ? existing : {})
+      const annotations = first.annotations && typeof first.annotations === 'object'
+        ? { ...first.annotations }
+        : annotationKeys.reduce((acc, k) => {
+            if (first[k]) acc[k] = first[k]
+            return acc
+          }, {})
+      return { ...prev, [fk]: [{ text, annotations }] }
     })
   }
 
@@ -458,8 +474,15 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
   const setAnnotation = (fk, ak, value) => {
     setFields(prev => {
       const existing = prev[fk]
-      const obj = (existing && typeof existing === 'object') ? { ...existing } : { text: '' }
-      return { ...prev, [fk]: { ...obj, [ak]: value } }
+      const first = Array.isArray(existing) && existing[0]
+        ? existing[0]
+        : (existing && typeof existing === 'object' ? existing : { text: '' })
+      const text = first.text || ''
+      const annotations = {
+        ...(first.annotations && typeof first.annotations === 'object' ? first.annotations : {}),
+      }
+      annotations[ak] = value
+      return { ...prev, [fk]: [{ text, annotations }] }
     })
   }
 

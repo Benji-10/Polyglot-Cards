@@ -15,6 +15,13 @@ const FIELD_TYPE_OPTIONS = [
   { value: 'example', label: 'Example (cloze)' },
 ]
 
+const valueText = (v) => {
+  if (!v) return ''
+  if (Array.isArray(v)) return v.map(it => it?.text || '').filter(Boolean).join(' ;;; ')
+  if (typeof v === 'object') return v.text || ''
+  return String(v)
+}
+
 // Ruby options — mutually exclusive, shown in a dropdown
 export const RUBY_OPTIONS = [
   { key: 'none',                   label: 'None' },
@@ -1363,21 +1370,35 @@ function ManualCardForm({ deckId, fields, onSaved }) {
     if (!word.trim()) return
     setSaving(true)
     try {
-      // Wrap annotated field values as objects: { text, annotationType? }
+      // Wrap annotated/example field values as [{ text, annotations }]
       const builtFields = {}
       for (const f of fields) {
         const text = fieldValues[f.key] || ''
         if (!text) continue
         const annotationKeys = getAnnotationKeys(f.phonetics)
-        if (annotationKeys.length === 0) {
+        const isStructured = annotationKeys.length > 0 || f.field_type === 'example'
+        if (!isStructured) {
           builtFields[f.key] = text
         } else {
-          const obj = { text }
+          const annotations = {}
           for (const ak of annotationKeys) {
             const v = fieldValues[`${f.key}__${ak}`] || ''
-            if (v) obj[ak] = v
+            if (v) annotations[ak] = v
           }
-          builtFields[f.key] = obj
+          if (f.field_type === 'example') {
+            const lines = text.split(' ;;; ').map(s => s.trim()).filter(Boolean)
+            const annoByKey = {}
+            Object.entries(annotations).forEach(([k, raw]) => {
+              annoByKey[k] = String(raw).split(' ;;; ').map(s => s.trim())
+            })
+            builtFields[f.key] = lines.map((line, i) => {
+              const ann = {}
+              Object.entries(annoByKey).forEach(([k, arr]) => { if (arr[i]) ann[k] = arr[i] })
+              return { text: line, annotations: ann }
+            })
+          } else {
+            builtFields[f.key] = [{ text, annotations }]
+          }
         }
       }
       await api.createCard({ deck_id: deckId, word: word.trim(), fields: builtFields })
@@ -1490,7 +1511,7 @@ function HomographModal({ groups, blueprint, onConfirm, onClose }) {
             <div className="space-y-2">
               {g.senses.map((s, sIdx) => {
                 const rawPreview = defField ? s.card[defField.key] : ''
-                const preview = rawPreview && typeof rawPreview === 'object' ? rawPreview.text : rawPreview
+                const preview = valueText(rawPreview)
                 return (
                   <label key={sIdx} className="flex items-start gap-3 cursor-pointer p-2 rounded-lg transition-colors hover:bg-white/5">
                     <input type="checkbox" checked={s.selected} onChange={() => toggle(gIdx, sIdx)} className="mt-0.5 flex-shrink-0" />
@@ -1557,8 +1578,8 @@ function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
           const existing   = collisions[idx].existing
           const rawExisting = defField ? existing.fields?.[defField.key] : null
           const rawIncoming = defField ? incoming[defField.key] : null
-          const existingVal = rawExisting && typeof rawExisting === 'object' ? rawExisting.text : rawExisting
-          const incomingVal = rawIncoming && typeof rawIncoming === 'object' ? rawIncoming.text : rawIncoming
+          const existingVal = valueText(rawExisting)
+          const incomingVal = valueText(rawIncoming)
 
           return (
             <div key={incoming.word + idx} className="rounded-xl p-4"
