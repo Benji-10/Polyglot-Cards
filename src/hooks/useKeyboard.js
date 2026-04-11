@@ -10,7 +10,7 @@ import { useEffect } from 'react'
  * 4              → Easy
  * Escape         → exit session
  */
-export function useStudyKeyboard({ phase, isPassive, onReveal, onAdvance, onRate, onExit, enabled = true }) {
+export function useStudyKeyboard({ phase, isPassive, onReveal, onAdvance, onRate, onExit, onDigit, enabled = true }) {
   useEffect(() => {
     if (!enabled) return
 
@@ -40,12 +40,16 @@ export function useStudyKeyboard({ phase, isPassive, onReveal, onAdvance, onRate
         if (e.key === '4') onRate?.(4)
       }
 
+      if (phase === 'prompt' && !isPassive && ['1', '2', '3', '4'].includes(e.key)) {
+        onDigit?.(Number(e.key))
+      }
+
       if (e.code === 'Escape') onExit?.()
     }
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [phase, isPassive, onReveal, onAdvance, onRate, onExit, enabled])
+  }, [phase, isPassive, onReveal, onAdvance, onRate, onExit, onDigit, enabled])
 }
 
 /**

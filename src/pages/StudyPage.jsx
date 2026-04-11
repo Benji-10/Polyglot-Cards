@@ -11,6 +11,14 @@ import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
 import RubyText from '../components/shared/RubyText'
 
+const fieldText = (value) => {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(v => v?.text).filter(Boolean).join(' ;;; ')
+  if (typeof value === 'object') return value.text || ''
+  return String(value)
+}
+
 // ─────────────────────────────────────────────
 // Card modes:
 //   direction:    'targetToSource' | 'sourceToTarget'
@@ -349,7 +357,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const clozeData = useMemo(() => {
     if (config.interaction !== 'cloze' || !exampleField || !currentCard) return { hasCloze: false }
     const fieldVal = currentCard.fields?.[exampleField.key]
-    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    const raw = fieldText(fieldVal)
     return parseCloze(raw)
   }, [currentCard?.id, config.interaction, exampleField?.key]) // eslint-disable-line
 
@@ -482,7 +490,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const submitCloze = () => {
     if (!currentCard || phase !== 'prompt') return
     const fieldVal = currentCard.fields?.[exampleField?.key]
-    const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+    const raw = fieldText(fieldVal)
     const clozeData = parseCloze(raw)
     const result = fuzzyMatch(clozeAnswer, clozeData.answer || '', { strictAccents, strictMode })
     reveal({ ...result, answer: clozeData.answer, typed: clozeAnswer })
@@ -502,6 +510,11 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     onReveal: () => reveal(null),
     onAdvance: advanceActive,
     onRate: (r) => advance(r),
+    onDigit: (digit) => {
+      if (config.interaction !== 'multipleChoice' || phase !== 'prompt') return
+      const choice = choices[digit - 1]
+      if (choice !== undefined) submitChoice(choice)
+    },
     onExit: onEnd,
     enabled: !done,
   })
@@ -621,7 +634,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'transparent' }}
                   onClick={() => submitChoice(choice)}>
                   <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {['A','B','C','D'][i]}
+                    {`${i + 1}. ${['A','B','C','D'][i]}`}
                   </span>
                   {choice}
                 </button>
@@ -711,7 +724,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 return (
                   <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm"
                     style={{ borderColor, background: bg, color: 'var(--text-primary)' }}>
-                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A','B','C','D'][i]}</span>
+                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{`${i + 1}. ${['A','B','C','D'][i]}`}</span>
                     {choice}
                   </div>
                 )
@@ -786,7 +799,7 @@ function getFront(card, direction, blueprint, deck, exampleField) {
     let clozeSentence = null
     if (contextLanguage === 'cloze' && exampleField) {
       const fieldVal = card.fields?.[exampleField.key]
-      const raw = fieldVal && typeof fieldVal === 'object' ? fieldVal.text : (fieldVal || '')
+      const raw = fieldText(fieldVal)
       if (raw) {
         const { before, answer, after, hasCloze } = parseCloze(raw)
         clozeSentence = hasCloze ? { before, answer, after } : null
@@ -808,7 +821,7 @@ function getFront(card, direction, blueprint, deck, exampleField) {
     || blueprint[0]
   const rawVal = srcField ? card.fields?.[srcField.key] : null
   // source_translation is always a plain string, but guard for object shape just in case
-  const val = rawVal && typeof rawVal === 'object' ? rawVal.text : rawVal
+  const val = fieldText(rawVal)
   return {
     word: val || card.word,
     label: deck?.source_language || 'Source',
@@ -829,7 +842,7 @@ function getAnswer(card, direction, blueprint, deck) {
       || blueprint[0]
     const raw = srcField ? card.fields?.[srcField.key] : null
     // Fields may be objects { text, ... } or plain strings
-    return raw && typeof raw === 'object' ? raw.text : (raw || card.word)
+    return fieldText(raw) || card.word
   }
   return card.word
 }
@@ -905,11 +918,11 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             {blueprint.map(field => {
               const value = backCard?.fields?.[field.key]
               // value may be a string (unannotated) or object { text, ... } (annotated/example)
-              const textVal = value && typeof value === 'object' ? value.text : value
+              const textVal = fieldText(value)
               if (!textVal) return null
               return (
                 <div key={field.key} className="flex gap-2 min-w-0">
-                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '80px' }}>{field.label}</span>
+                  <span className="section-title flex-shrink-0 mt-0.5 truncate" style={{ width: '110px' }} title={field.label}>{field.label}</span>
                   <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
                       ? <ExampleDisplay fieldValue={value} cardId={backCard?.id} />
@@ -940,7 +953,26 @@ function PromptCard({ front, deck }) {
 }
 
 function ExampleDisplay({ fieldValue, cardId }) {
-  // fieldValue may be { text: "...", romanisation: "..." } or a plain string
+  const pickIndex = (count) => {
+    if (count <= 1) return 0
+    const seed = String(cardId || '')
+    let hash = 0
+    for (let i = 0; i < seed.length; i++) hash = ((hash << 5) - hash) + seed.charCodeAt(i)
+    return Math.abs(hash) % count
+  }
+
+  // Preferred shape: [{ text, annotations: { ... } }, ...]
+  if (Array.isArray(fieldValue)) {
+    const rows = fieldValue.filter(v => v && typeof v === 'object' && v.text)
+    const idx = pickIndex(rows.length)
+    const picked = rows[idx] || rows[0]
+    if (!picked) return null
+    const sentence = picked.text
+    const annotations = Object.entries(picked.annotations || {})
+    return renderExample(sentence, annotations)
+  }
+
+  // Legacy shape fallback
   const raw = fieldValue && typeof fieldValue === 'object' ? fieldValue.text : (fieldValue || '')
   const annotations = fieldValue && typeof fieldValue === 'object'
     ? Object.entries(fieldValue).filter(([k]) => k !== 'text')
@@ -948,11 +980,18 @@ function ExampleDisplay({ fieldValue, cardId }) {
 
   // Pick a sentence index once per card — same index applies to all annotation lines
   const sentenceParts = raw.split(' ;;; ').map(s => s.trim()).filter(Boolean)
-  const idx = useMemo(() => Math.floor(Math.random() * Math.max(sentenceParts.length, 1)), [cardId]) // eslint-disable-line
+  const idx = pickIndex(sentenceParts.length)
   const sentence = sentenceParts[idx] || raw
 
-  const { before, answer, after, hasCloze } = parseCloze(sentence)
+  return renderExample(sentence, annotations.map(([key, annoRaw]) => [key, annoPartsFor(annoRaw, idx)]))
+}
 
+function annoPartsFor(annoRaw, idx) {
+  const annoParts = (annoRaw || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
+  return annoParts[idx] || annoRaw || ''
+}
+
+function renderExample(sentence, annotations) {
   const renderSentence = (text) => {
     const { before: b, answer: a, after: af, hasCloze: hc } = parseCloze(text)
     if (!hc) return <span>{text}</span>
@@ -966,14 +1005,10 @@ function ExampleDisplay({ fieldValue, cardId }) {
       </>
     )
   }
-
   return (
     <span style={{ color: 'var(--text-primary)', fontFamily: fontForText(sentence) }}>
       {renderSentence(sentence)}
-      {/* Show the matching annotation line (same index) below */}
-      {annotations.map(([key, annoRaw]) => {
-        const annoParts = (annoRaw || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
-        const annoSentence = annoParts[idx] || annoRaw || ''
+      {annotations.map(([key, annoSentence]) => {
         if (!annoSentence) return null
         return (
           <span key={key} className="block text-xs mt-1" style={{ color: 'var(--text-muted)', fontFamily: fontForText(annoSentence) }}>
