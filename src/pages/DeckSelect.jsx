@@ -227,15 +227,6 @@ function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
         </div>
 
         <div>
-          <label className="section-title block mb-1.5">Card front shows</label>
-          <select className="input" value={form.card_front_field}
-            onChange={e => setForm(f => ({ ...f, card_front_field: e.target.value }))}>
-            <option value="auto">Auto (word only)</option>
-            <option value="word+hint">Word + first show_on_front field</option>
-          </select>
-        </div>
-
-        <div>
           <label className="section-title block mb-1.5">Context on card front (Target → Source)</label>
           <div className="grid grid-cols-2 gap-2">
             {[

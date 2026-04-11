@@ -199,7 +199,12 @@ export default function BlueprintPage() {
       const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
       const phonNeedsRegen = rubyChanged || extrasAdded
 
-      if (descChanged || typeChanged || phonNeedsRegen) regenFields.push(nf)
+      if (descChanged || typeChanged || phonNeedsRegen) {
+        regenFields.push({
+          ...nf,
+          _forceRegen: descChanged || typeChanged,
+        })
+      }
     }
 
     // Keys removed from blueprint → purge their data from all cards
@@ -250,9 +255,33 @@ export default function BlueprintPage() {
     if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
 
     // Only regen cards that are actually missing at least one regen field
-    const fieldEmpty = v => !v || v === '' || (typeof v === 'object' && !v.text)
+    const getAnnotationKeys = (ph) => {
+      if (!ph) return []
+      if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+      const keys = []
+      if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+      if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+      return keys
+    }
+    const fieldNeedsRegen = (card, field) => {
+      if (field._forceRegen) return true
+      const v = card.fields?.[field.key]
+      if (!v || v === '') return true
+
+      const annotationKeys = getAnnotationKeys(field.phonetics)
+      if (annotationKeys.length === 0) {
+        if (field.field_type === 'example') {
+          const text = typeof v === 'object' ? v.text : v
+          return !text
+        }
+        return false
+      }
+      if (typeof v !== 'object') return true
+      if (!v.text) return true
+      return annotationKeys.some(ak => !v[ak])
+    }
     const cardsNeedingRegen = freshCards.filter(card =>
-      regenFields.some(f => fieldEmpty(card.fields?.[f.key]))
+      regenFields.some(f => fieldNeedsRegen(card, f))
     )
     if (cardsNeedingRegen.length === 0) {
       if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })

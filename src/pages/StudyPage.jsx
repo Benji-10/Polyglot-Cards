@@ -502,6 +502,11 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     onReveal: () => reveal(null),
     onAdvance: advanceActive,
     onRate: (r) => advance(r),
+    onDigit: (digit) => {
+      if (config.interaction !== 'multipleChoice' || phase !== 'prompt') return
+      const choice = choices[digit - 1]
+      if (choice !== undefined) submitChoice(choice)
+    },
     onExit: onEnd,
     enabled: !done,
   })
@@ -621,7 +626,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'transparent' }}
                   onClick={() => submitChoice(choice)}>
                   <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {['A','B','C','D'][i]}
+                    {`${i + 1}. ${['A','B','C','D'][i]}`}
                   </span>
                   {choice}
                 </button>
@@ -711,7 +716,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 return (
                   <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm"
                     style={{ borderColor, background: bg, color: 'var(--text-primary)' }}>
-                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{['A','B','C','D'][i]}</span>
+                    <span className="mr-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>{`${i + 1}. ${['A','B','C','D'][i]}`}</span>
                     {choice}
                   </div>
                 )
@@ -909,7 +914,7 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
               if (!textVal) return null
               return (
                 <div key={field.key} className="flex gap-2 min-w-0">
-                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width: '80px' }}>{field.label}</span>
+                  <span className="section-title flex-shrink-0 mt-0.5 truncate" style={{ width: '110px' }} title={field.label}>{field.label}</span>
                   <div className="flex-1 min-w-0 text-sm" style={{ color: 'var(--text-primary)' }}>
                     {field.field_type === 'example'
                       ? <ExampleDisplay fieldValue={value} cardId={backCard?.id} />
