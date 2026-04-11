@@ -276,22 +276,12 @@ export default function BlueprintPage() {
       if (!v || v === '') return true
 
       const annotationKeys = getAnnotationKeys(field.phonetics)
-      const isArrayShape = Array.isArray(v)
       if (annotationKeys.length === 0) {
         if (field.field_type === 'example') {
-          if (isArrayShape) return v.length === 0 || !v.some(it => it?.text)
           const text = typeof v === 'object' ? v.text : v
           return !text
         }
         return false
-      }
-      if (isArrayShape) {
-        if (v.length === 0) return true
-        return v.some(it => {
-          if (!it?.text) return true
-          const anns = it.annotations && typeof it.annotations === 'object' ? it.annotations : {}
-          return annotationKeys.some(ak => !anns[ak])
-        })
       }
       if (typeof v !== 'object') return true
       if (!v.text) return true
