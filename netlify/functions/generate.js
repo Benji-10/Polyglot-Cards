@@ -112,7 +112,7 @@ function normaliseGeneratedCards(parsedCards, blueprint) {
   })
 }
 
-function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch, allowLatinTyping = false) {
+function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
 
   // Human-readable descriptions for each annotation type
   const ANNOTATION_DESCRIPTIONS = {

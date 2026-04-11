@@ -19,21 +19,6 @@ const fieldText = (value) => {
   return String(value)
 }
 
-const ROMANISATION_KEYS = ['romanisation', 'romaji', 'pinyin', 'jyutping', 'hangulRomanisation', 'cantoneseRomanisation', 'cyrillicTranslit']
-const DIACRITIC_KEYS = ['1','2','3','4','5','6','7','8','9','0']
-const getDiacriticPresets = () => ([
-  { key: '1', label: '́', mark: '\u0301', group: 'accent' }, // acute
-  { key: '2', label: '̀', mark: '\u0300', group: 'accent' }, // grave
-  { key: '3', label: '̂', mark: '\u0302', group: 'accent' }, // circumflex
-  { key: '4', label: '̃', mark: '\u0303', group: 'accent' }, // tilde
-  { key: '5', label: '̈', mark: '\u0308', group: 'accent' }, // diaeresis
-  { key: '6', label: '̄', mark: '\u0304', group: 'accent' }, // macron
-  { key: '7', label: '̌', mark: '\u030C', group: 'accent' }, // caron
-  { key: '8', label: '̧', mark: '\u0327', group: 'hook' },   // cedilla
-  { key: '9', label: '̨', mark: '\u0328', group: 'hook' },   // ogonek
-  { key: '0', label: '̇', mark: '\u0307', group: 'dot' },    // dot above
-])
-
 // ─────────────────────────────────────────────
 // Card modes:
 //   direction:    'targetToSource' | 'sourceToTarget'
