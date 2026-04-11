@@ -4,6 +4,25 @@ import { useAuth } from '../hooks/useAuth'
 import { useToast } from '../components/shared/Toast'
 import { LANGUAGES } from '../lib/utils'
 
+const QUICK_ADD_RUBY_OPTIONS = [
+  { key: 'none', label: 'None' },
+  { key: 'furigana', label: 'Furigana' },
+  { key: 'romaji', label: 'Rōmaji' },
+  { key: 'pinyin', label: 'Pīnyīn' },
+  { key: 'bopomofo', label: 'Bopomofo' },
+  { key: 'jyutping', label: 'Jyutping' },
+  { key: 'hangulRomanisation', label: 'Hangul romanisation' },
+  { key: 'romanisation', label: 'Romanisation' },
+  { key: 'cyrillicTranslit', label: 'Cyrillic translit' },
+  { key: 'cantoneseRomanisation', label: 'Cantonese romanisation' },
+  { key: 'tones', label: 'Tones' },
+]
+const QUICK_ADD_EXTRA_OPTIONS = [
+  { key: 'diacritics', label: 'Diacritics' },
+  { key: 'ipa', label: 'IPA' },
+  { key: 'english', label: 'English gloss' },
+]
+
 export default function SettingsPage() {
   const { settings, updateSettings } = useAppStore()
   const { user, logout } = useAuth()
@@ -252,6 +271,13 @@ function QuickAddSection({ settings, updateSettings }) {
 }
 
 function QuickAddRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, isLast }) {
+  const ph = normalisePhonetics(field.phonetics)
+  const setRuby = (ruby) => onUpdate({ phonetics: { ...ph, ruby } })
+  const toggleExtra = (key) => {
+    const extras = ph.extras.includes(key) ? ph.extras.filter(k => k !== key) : [...ph.extras, key]
+    onUpdate({ phonetics: { ...ph, extras } })
+  }
+
   return (
     <div className="rounded-xl p-3" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
       {/* Row 1: controls + reorder */}
@@ -282,8 +308,40 @@ function QuickAddRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst,
       {/* Row 2: AI hint full width */}
       <input className="input text-xs py-1.5 w-full" value={field.description || ''}
         onChange={e => onUpdate({ description: e.target.value })} placeholder="AI hint — describe what Gemini should put in this field" />
+
+      {/* Row 3: phonetic annotations */}
+      <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2.5">
+        <div>
+          <label className="section-title block mb-1">Ruby</label>
+          <select className="input text-xs py-1.5 w-full" value={ph.ruby} onChange={e => setRuby(e.target.value)}>
+            {QUICK_ADD_RUBY_OPTIONS.map(opt => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="section-title block mb-1">Additional annotations</label>
+          <div className="flex flex-wrap gap-2">
+            {QUICK_ADD_EXTRA_OPTIONS.map(opt => (
+              <label key={opt.key} className="text-xs flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer"
+                style={{ background: ph.extras.includes(opt.key) ? 'var(--accent-glow)' : 'transparent', border: '1px solid var(--border)' }}>
+                <input type="checkbox" checked={ph.extras.includes(opt.key)} onChange={() => toggleExtra(opt.key)} />
+                {opt.label}
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
+}
+
+function normalisePhonetics(ph) {
+  if (!ph) return { ruby: 'none', extras: [] }
+  if (Array.isArray(ph)) {
+    const ruby = ph.find(k => QUICK_ADD_RUBY_OPTIONS.some(opt => opt.key === k && k !== 'none')) || 'none'
+    const extras = ph.filter(k => k && k !== 'none' && k !== ruby)
+    return { ruby, extras }
+  }
+  return { ruby: ph.ruby || 'none', extras: ph.extras || [] }
 }
 
 // ── Shared sub-components ──────────────────────────────────

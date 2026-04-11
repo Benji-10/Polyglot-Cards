@@ -3,11 +3,15 @@ import { fontForText } from '../../lib/utils'
 /**
  * RubyText — renders a field value with phonetic annotations.
  *
- * Field values are now objects:  { text: "...", furigana: "...", english: "..." }
+ * Field values can be:
+ *   - string
+ *   - object: { text, furigana, english, ... }
+ *   - array:  [{ text, annotations: { furigana, english, ... } }, ...]
  * Old flat string values are handled transparently for backward compat.
  *
  * `fieldValue` is the raw value from card.fields[fieldKey]:
- *   - New shape: { text, [annotationType]: value, ... }
+ *   - New shape: [{ text, annotations: { ... } }, ...]
+ *   - Legacy shape: { text, [annotationType]: value, ... }
  *   - Old shape: "plain string"  (no annotations — compat)
  */
 export default function RubyText({ fieldValue, phonetics, className = '', style = {} }) {
@@ -60,6 +64,14 @@ export default function RubyText({ fieldValue, phonetics, className = '', style 
 export function resolveField(fieldValue) {
   if (!fieldValue) return { text: '', annotations: {} }
   if (typeof fieldValue === 'string') return { text: fieldValue, annotations: {} }
+  if (Array.isArray(fieldValue)) {
+    const first = fieldValue.find(v => v && typeof v === 'object') || {}
+    const text = first.text || ''
+    const annotations = first.annotations && typeof first.annotations === 'object'
+      ? first.annotations
+      : {}
+    return { text, annotations }
+  }
   if (typeof fieldValue === 'object') {
     const { text = '', ...annotations } = fieldValue
     return { text, annotations }

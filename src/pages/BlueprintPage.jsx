@@ -15,6 +15,13 @@ const FIELD_TYPE_OPTIONS = [
   { value: 'example', label: 'Example (cloze)' },
 ]
 
+const valueText = (v) => {
+  if (!v) return ''
+  if (Array.isArray(v)) return v.map(it => it?.text || '').filter(Boolean).join(' ;;; ')
+  if (typeof v === 'object') return v.text || ''
+  return String(v)
+}
+
 // Ruby options — mutually exclusive, shown in a dropdown
 export const RUBY_OPTIONS = [
   { key: 'none',                   label: 'None' },
@@ -199,7 +206,12 @@ export default function BlueprintPage() {
       const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
       const phonNeedsRegen = rubyChanged || extrasAdded
 
-      if (descChanged || typeChanged || phonNeedsRegen) regenFields.push(nf)
+      if (descChanged || typeChanged || phonNeedsRegen) {
+        regenFields.push({
+          ...nf,
+          _forceRegen: descChanged || typeChanged,
+        })
+      }
     }
 
     // Keys removed from blueprint → purge their data from all cards
@@ -250,9 +262,43 @@ export default function BlueprintPage() {
     if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
 
     // Only regen cards that are actually missing at least one regen field
-    const fieldEmpty = v => !v || v === '' || (typeof v === 'object' && !v.text)
+    const getAnnotationKeys = (ph) => {
+      if (!ph) return []
+      if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+      const keys = []
+      if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+      if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+      return keys
+    }
+    const fieldNeedsRegen = (card, field) => {
+      if (field._forceRegen) return true
+      const v = card.fields?.[field.key]
+      if (!v || v === '') return true
+
+      const annotationKeys = getAnnotationKeys(field.phonetics)
+      const isArrayShape = Array.isArray(v)
+      if (annotationKeys.length === 0) {
+        if (field.field_type === 'example') {
+          if (isArrayShape) return v.length === 0 || !v.some(it => it?.text)
+          const text = typeof v === 'object' ? v.text : v
+          return !text
+        }
+        return false
+      }
+      if (isArrayShape) {
+        if (v.length === 0) return true
+        return v.some(it => {
+          if (!it?.text) return true
+          const anns = it.annotations && typeof it.annotations === 'object' ? it.annotations : {}
+          return annotationKeys.some(ak => !anns[ak])
+        })
+      }
+      if (typeof v !== 'object') return true
+      if (!v.text) return true
+      return annotationKeys.some(ak => !v[ak])
+    }
     const cardsNeedingRegen = freshCards.filter(card =>
-      regenFields.some(f => fieldEmpty(card.fields?.[f.key]))
+      regenFields.some(f => fieldNeedsRegen(card, f))
     )
     if (cardsNeedingRegen.length === 0) {
       if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
@@ -297,6 +343,7 @@ export default function BlueprintPage() {
             targetLanguage: targetLang,
             sourceLanguage: deckRef.current?.source_language || 'English',
             contextLanguage: deckRef.current?.context_language || 'target',
+            allowLatinTyping: deckRef.current?.allow_latin_typing === true,
           }, regenFields)
           if (genRes?.cards?.length) { lastErr = null; break }
           lastErr = new Error('No cards returned')
@@ -497,6 +544,7 @@ export default function BlueprintPage() {
                   targetLanguage: deckRef.current?.target_language || deck?.target_language || '',
                   sourceLanguage: deckRef.current?.source_language || 'English',
                   contextLanguage: deckRef.current?.context_language || 'target',
+                  allowLatinTyping: deckRef.current?.allow_latin_typing === true,
                 }, fieldsRef.current || [])
                 if (genRes?.cards?.length) { lastErr = null; break }
                 lastErr = new Error('No cards returned from API')
@@ -1334,21 +1382,35 @@ function ManualCardForm({ deckId, fields, onSaved }) {
     if (!word.trim()) return
     setSaving(true)
     try {
-      // Wrap annotated field values as objects: { text, annotationType? }
+      // Wrap annotated/example field values as [{ text, annotations }]
       const builtFields = {}
       for (const f of fields) {
         const text = fieldValues[f.key] || ''
         if (!text) continue
         const annotationKeys = getAnnotationKeys(f.phonetics)
-        if (annotationKeys.length === 0) {
+        const isStructured = annotationKeys.length > 0 || f.field_type === 'example'
+        if (!isStructured) {
           builtFields[f.key] = text
         } else {
-          const obj = { text }
+          const annotations = {}
           for (const ak of annotationKeys) {
             const v = fieldValues[`${f.key}__${ak}`] || ''
-            if (v) obj[ak] = v
+            if (v) annotations[ak] = v
           }
-          builtFields[f.key] = obj
+          if (f.field_type === 'example') {
+            const lines = text.split(' ;;; ').map(s => s.trim()).filter(Boolean)
+            const annoByKey = {}
+            Object.entries(annotations).forEach(([k, raw]) => {
+              annoByKey[k] = String(raw).split(' ;;; ').map(s => s.trim())
+            })
+            builtFields[f.key] = lines.map((line, i) => {
+              const ann = {}
+              Object.entries(annoByKey).forEach(([k, arr]) => { if (arr[i]) ann[k] = arr[i] })
+              return { text: line, annotations: ann }
+            })
+          } else {
+            builtFields[f.key] = [{ text, annotations }]
+          }
         }
       }
       await api.createCard({ deck_id: deckId, word: word.trim(), fields: builtFields })
@@ -1461,7 +1523,7 @@ function HomographModal({ groups, blueprint, onConfirm, onClose }) {
             <div className="space-y-2">
               {g.senses.map((s, sIdx) => {
                 const rawPreview = defField ? s.card[defField.key] : ''
-                const preview = rawPreview && typeof rawPreview === 'object' ? rawPreview.text : rawPreview
+                const preview = valueText(rawPreview)
                 return (
                   <label key={sIdx} className="flex items-start gap-3 cursor-pointer p-2 rounded-lg transition-colors hover:bg-white/5">
                     <input type="checkbox" checked={s.selected} onChange={() => toggle(gIdx, sIdx)} className="mt-0.5 flex-shrink-0" />
@@ -1528,8 +1590,8 @@ function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
           const existing   = collisions[idx].existing
           const rawExisting = defField ? existing.fields?.[defField.key] : null
           const rawIncoming = defField ? incoming[defField.key] : null
-          const existingVal = rawExisting && typeof rawExisting === 'object' ? rawExisting.text : rawExisting
-          const incomingVal = rawIncoming && typeof rawIncoming === 'object' ? rawIncoming.text : rawIncoming
+          const existingVal = valueText(rawExisting)
+          const incomingVal = valueText(rawIncoming)
 
           return (
             <div key={incoming.word + idx} className="rounded-xl p-4"
