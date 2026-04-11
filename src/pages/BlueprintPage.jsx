@@ -333,6 +333,7 @@ export default function BlueprintPage() {
             targetLanguage: targetLang,
             sourceLanguage: deckRef.current?.source_language || 'English',
             contextLanguage: deckRef.current?.context_language || 'target',
+            allowLatinTyping: deckRef.current?.allow_latin_typing === true,
           }, regenFields)
           if (genRes?.cards?.length) { lastErr = null; break }
           lastErr = new Error('No cards returned')
@@ -533,6 +534,7 @@ export default function BlueprintPage() {
                   targetLanguage: deckRef.current?.target_language || deck?.target_language || '',
                   sourceLanguage: deckRef.current?.source_language || 'English',
                   contextLanguage: deckRef.current?.context_language || 'target',
+                  allowLatinTyping: deckRef.current?.allow_latin_typing === true,
                 }, fieldsRef.current || [])
                 if (genRes?.cards?.length) { lastErr = null; break }
                 lastErr = new Error('No cards returned from API')

@@ -17,14 +17,14 @@ export const handler = async (event) => {
     }
 
     if (method === 'POST') {
-      const { name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode } = JSON.parse(event.body)
+      const { name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode, allow_latin_typing } = JSON.parse(event.body)
       if (!name || !target_language) return error('name and target_language required')
 
       const { rows } = await query(
-        `INSERT INTO decks (user_id, name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        `INSERT INTO decks (user_id, name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode, allow_latin_typing)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [userId, name, target_language, source_language || 'English', description || '', card_front_field || 'auto', context_language || 'target',
-         strict_accents !== false, strict_mode === true]
+         strict_accents !== false, strict_mode === true, allow_latin_typing === true]
       )
       return json(rows[0], 201)
     }
@@ -32,17 +32,18 @@ export const handler = async (event) => {
     if (method === 'PUT') {
       const id = params.id
       if (!id) return error('id required')
-      const { name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode } = JSON.parse(event.body)
+      const { name, target_language, source_language, description, card_front_field, context_language, strict_accents, strict_mode, allow_latin_typing } = JSON.parse(event.body)
 
       const { rows } = await query(
         `UPDATE decks SET name=COALESCE($1,name), target_language=COALESCE($2,target_language),
          source_language=COALESCE($3,source_language), description=COALESCE($4,description),
          card_front_field=COALESCE($5,card_front_field), context_language=COALESCE($6,context_language),
          strict_accents=COALESCE($7,strict_accents), strict_mode=COALESCE($8,strict_mode),
+         allow_latin_typing=COALESCE($9,allow_latin_typing),
          updated_at=NOW()
-         WHERE id=$9 AND user_id=$10 RETURNING *`,
+         WHERE id=$10 AND user_id=$11 RETURNING *`,
         [name, target_language, source_language, description, card_front_field, context_language,
-         strict_accents, strict_mode, id, userId]
+         strict_accents, strict_mode, allow_latin_typing, id, userId]
       )
       if (!rows.length) return error('Deck not found', 404)
       return json(rows[0])

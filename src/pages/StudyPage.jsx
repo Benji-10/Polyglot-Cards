@@ -19,6 +19,21 @@ const fieldText = (value) => {
   return String(value)
 }
 
+const ROMANISATION_KEYS = ['romanisation', 'romaji', 'pinyin', 'jyutping', 'hangulRomanisation', 'cantoneseRomanisation', 'cyrillicTranslit']
+const DIACRITIC_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+const getDiacriticPresets = () => ([
+  { key: '1', label: '́', mark: '\u0301', group: 'accent' }, // acute
+  { key: '2', label: '̀', mark: '\u0300', group: 'accent' }, // grave
+  { key: '3', label: '̂', mark: '\u0302', group: 'accent' }, // circumflex
+  { key: '4', label: '̃', mark: '\u0303', group: 'accent' }, // tilde
+  { key: '5', label: '̈', mark: '\u0308', group: 'accent' }, // diaeresis
+  { key: '6', label: '̄', mark: '\u0304', group: 'accent' }, // macron
+  { key: '7', label: '̌', mark: '\u030C', group: 'accent' }, // caron
+  { key: '8', label: '̧', mark: '\u0327', group: 'hook' },   // cedilla
+  { key: '9', label: '̨', mark: '\u0328', group: 'hook' },   // ogonek
+  { key: '0', label: '̇', mark: '\u0307', group: 'dot' },    // dot above
+])
+
 // ─────────────────────────────────────────────
 // Card modes:
 //   direction:    'targetToSource' | 'sourceToTarget'
@@ -44,254 +59,7 @@ export default function StudyPage() {
     setSessionConfig(null)
     sessionModeRef.current = null
   }, [mode])
-
-  const { data: deck } = useQuery({
-    queryKey: ['decks'],
-    queryFn: api.getDecks,
-    select: (decks) => decks.find(d => d.id === deckId),
-  })
-
-  const { data: blueprint = [] } = useQuery({
-    queryKey: ['blueprint', deckId],
-    queryFn: () => api.getBlueprintFields(deckId),
-  })
-
-  const { data: allCards = [] } = useQuery({
-    queryKey: ['cards', deckId],
-    queryFn: () => api.getCards(deckId),
-  })
-
-  const { data: dueCards = [] } = useQuery({
-    queryKey: ['srs', deckId],
-    queryFn: () => api.getSRSCards(deckId),
-    enabled: mode === 'learn',
-  })
-
-  const { stats } = useDeckStats(deckId)
-
-  if (!sessionConfig) {
-    return (
-      <SessionSetup
-        mode={mode}
-        deck={deck}
-        allCards={allCards}
-        dueCards={dueCards}
-        blueprint={blueprint}
-        settings={settings}
-        savedConfig={sessionConfigs?.[deckId]}
-        stats={stats}
-        onStart={(cfg) => {
-          sessionModeRef.current = mode
-          saveSessionConfig(deckId, cfg)
-          setSessionConfig(cfg)
-        }}
-        onBack={() => navigate('/')}
-      />
-    )
-  }
-
-  return (
-    <StudySession
-      deckId={deckId}
-      mode={mode}
-      deck={deck}
-      blueprint={blueprint}
-      config={sessionConfig}
-      allCards={allCards}
-      dueCards={dueCards}
-      strictAccents={deck?.strict_accents !== false}
-      strictMode={deck?.strict_mode === true}
-      animationsEnabled={settings.animationsEnabled !== false}
-      onEnd={() => setSessionConfig(null)}
-    />
-  )
-}
-
-// ─────────────────────────────────────────────
-// SESSION SETUP
-// ─────────────────────────────────────────────
-function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, savedConfig, stats, onStart, onBack }) {
-  const exampleField = blueprint.find(f => f.field_type === 'example')
-  const sourceField = blueprint.find(f => f.key === 'definition') || blueprint.find(f => f.key === 'reading') || blueprint[0]
-
-  const [config, setConfig] = useState({
-    batchSize: savedConfig?.batchSize ?? settings.defaultBatchSize ?? 20,
-    cardPool: savedConfig?.cardPool ?? 'all',
-    randomise: savedConfig?.randomise ?? true,
-    direction: savedConfig?.direction ?? 'targetToSource',
-    interaction: savedConfig?.interaction ?? 'passive',
-  })
-
-  const availableCount = (() => {
-    if (mode === 'learn') return dueCards.length + (stats.new || 0)
-    const pool = config.cardPool === 'seen'   ? allCards.filter(c => c.seen)
-               : config.cardPool === 'unseen' ? allCards.filter(c => !c.seen)
-               : allCards
-    return pool.length
-  })()
-
-  // Cloze only makes sense sourceToTarget (fill in the target word from context)
-  // and only when there's an example field
-  const clozeAvailable = !!exampleField && config.direction === 'sourceToTarget'
-
-  // If direction changes and cloze is no longer available, fall back to passive
-  const prevDirection = useRef(config.direction)
-  useEffect(() => {
-    if (prevDirection.current !== config.direction) {
-      prevDirection.current = config.direction
-      if (config.interaction === 'cloze' && !clozeAvailable) {
-        setConfig(c => ({ ...c, interaction: 'passive' }))
-      }
-    }
-  }, [config.direction, clozeAvailable]) // eslint-disable-line
-  const sourceLang = deck?.source_language || 'English'
-  const targetLang = deck?.target_language || 'Target'
-
-  return (
-    <div className="max-w-lg mx-auto px-6 py-10">
-      <button className="btn-ghost mb-6 flex items-center gap-2 text-sm" onClick={onBack}>← Back</button>
-
-      <div className="section-title mb-1">{deck?.name}</div>
-      <h1 className="font-display text-3xl font-bold mb-6" style={{ color: 'var(--text-primary)' }}>
-        {mode === 'learn' ? '🧠 Learn' : '🎯 Freestyle'}
-      </h1>
-
-      {mode === 'learn' ? (
-        <div className="card p-5 mb-6">
-          <div className="grid grid-cols-2 gap-4 mb-5">
-            <div className="text-center">
-              <div className="font-display text-3xl font-bold" style={{ color: 'var(--accent-danger)' }}>{dueCards.length}</div>
-              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Due for review</div>
-            </div>
-            <div className="text-center">
-              <div className="font-display text-3xl font-bold" style={{ color: 'var(--accent-secondary)' }}>{stats.new || 0}</div>
-              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>New cards</div>
-            </div>
-          </div>
-          <DeckStatsBar stats={stats} />
-        </div>
-      ) : (
-        <div className="card p-4 mb-6">
-          <DeckStatsBar stats={stats} />
-          <div className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>{availableCount} cards in pool</div>
-        </div>
-      )}
-
-      <div className="card p-5 space-y-5 mb-6">
-        {/* Direction */}
-        <div>
-          <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Card direction</div>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { v: 'targetToSource', label: `${targetLang} →`, sub: sourceLang },
-              { v: 'sourceToTarget', label: `${sourceLang} →`, sub: targetLang },
-            ].map(({ v, label, sub }) => (
-              <button key={v}
-                className="flex flex-col items-center p-3 rounded-xl border transition-all text-sm"
-                style={{ borderColor: config.direction === v ? 'var(--accent-primary)' : 'var(--border)', background: config.direction === v ? 'var(--accent-glow)' : 'transparent', color: config.direction === v ? 'var(--accent-primary)' : 'var(--text-secondary)' }}
-                onClick={() => setConfig(c => ({ ...c, direction: v }))}>
-                <span className="font-medium">{label}</span>
-                <span className="text-xs mt-0.5" style={{ color: config.direction === v ? 'var(--accent-primary)' : 'var(--text-muted)' }}>{sub}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Interaction */}
-        <div>
-          <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Study mode</div>
-          <div className="space-y-1.5">
-            {[
-              { v: 'passive',        label: '👁 Passive',         sub: 'Flip card, rate 1–4 yourself',         available: true },
-              { v: 'typing',         label: '⌨ Typing',           sub: 'Type the answer — auto-rated',          available: true },
-              { v: 'multipleChoice', label: '🔲 Multiple choice',  sub: 'Pick from 4 options — auto-rated',      available: allCards.length >= 4 },
-              { v: 'cloze',          label: '✦ Cloze',            sub: 'Fill in the blank from example',        available: clozeAvailable },
-            ].map(({ v, label, sub, available }) => (
-              <button key={v} disabled={!available}
-                className="w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left disabled:opacity-40"
-                style={{ borderColor: config.interaction === v ? 'var(--accent-primary)' : 'var(--border)', background: config.interaction === v ? 'var(--accent-glow)' : 'transparent' }}
-                onClick={() => available && setConfig(c => ({ ...c, interaction: v }))}>
-                <span className="text-sm font-medium flex-1" style={{ color: config.interaction === v ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                  {label}
-                </span>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{sub}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <ConfigRow label="Batch size" desc="Cards per session">
-          <input type="number" min={1} max={500} className="input w-24 text-center"
-            value={config.batchSize}
-            onChange={e => setConfig(c => ({ ...c, batchSize: Math.max(1, Number(e.target.value)) }))} />
-        </ConfigRow>
-
-        {mode === 'freestyle' && (
-          <ConfigRow label="Card pool">
-            <div className="flex gap-2">
-              {[['all','All'],['seen','Seen'],['unseen','Unseen']].map(([v, l]) => (
-                <SegmentButton key={v} label={l} active={config.cardPool === v}
-                  onClick={() => setConfig(c => ({ ...c, cardPool: v }))} />
-              ))}
-            </div>
-          </ConfigRow>
-        )}
-
-        <ConfigRow label="Randomise order">
-          <Toggle value={config.randomise} onChange={v => setConfig(c => ({ ...c, randomise: v }))} />
-        </ConfigRow>
-      </div>
-
-      <button className="btn-primary w-full text-base py-3"
-        onClick={() => onStart(config)} disabled={availableCount === 0}>
-        {availableCount === 0
-          ? (mode === 'learn' ? 'Nothing due — great job!' : 'No cards in pool')
-          : `Start →`}
-      </button>
-    </div>
-  )
-}
-
-function ConfigRow({ label, desc, children }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div>
-        <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>{label}</div>
-        {desc && <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{desc}</div>}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function SegmentButton({ label, active, onClick }) {
-  return (
-    <button className="text-xs px-3 py-1.5 rounded-lg border transition-all" onClick={onClick}
-      style={{ borderColor: active ? 'var(--accent-primary)' : 'var(--border)', color: active ? 'var(--accent-primary)' : 'var(--text-secondary)', background: active ? 'var(--accent-glow)' : 'transparent' }}>
-      {label}
-    </button>
-  )
-}
-
-function Toggle({ value, onChange }) {
-  return (
-    <button role="switch" aria-checked={value}
-      className="w-11 h-6 rounded-full transition-colors relative flex-shrink-0"
-      style={{ background: value ? 'var(--accent-primary)' : 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-      onClick={() => onChange(!value)}>
-      <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white"
-        style={{ left: value ? '24px' : '3px', transition: 'left 0.2s' }} />
-    </button>
-  )
-}
-
-// ─────────────────────────────────────────────
-// STUDY SESSION
-// ─────────────────────────────────────────────
-function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, strictAccents = true, strictMode = false, animationsEnabled = true, onEnd }) {
-  const qc = useQueryClient()
-  const exampleField = blueprint.find(f => f.field_type === 'example')
-
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const queue = useRef([])
   const [queueReady, setQueueReady] = useState(false)
   const [cardIdx, setCardIdx] = useState(0)
@@ -317,8 +85,66 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const clozeInputRef     = useRef(null)
   const continueButtonRef = useRef(null)
 
-  // Accent chars from target words — only show in sourceToTarget mode
-  const accentChars = useMemo(() => extractAccentChars(allCards), [allCards])
+  const typingAssist = useMemo(() => extractTypingAssist(allCards), [allCards])
+
+  const insertIntoInput = (input, setValue, text) => {
+    if (!input) { setValue(prev => prev + text); return }
+    const start = input.selectionStart ?? input.value.length
+    const end = input.selectionEnd ?? input.value.length
+    const next = input.value.slice(0, start) + text + input.value.slice(end)
+    setValue(next)
+    requestAnimationFrame(() => {
+      input.focus()
+      input.setSelectionRange(start + text.length, start + text.length)
+    })
+  }
+
+  const applyMarkToInput = (input, setValue, preset) => {
+    if (!input) return
+    const cursor = input.selectionStart ?? input.value.length
+    const next = applyCombiningMark(input.value, cursor, preset)
+    setValue(next.value)
+    requestAnimationFrame(() => {
+      input.focus()
+      input.setSelectionRange(next.cursor, next.cursor)
+    })
+  }
+
+  const romanisedCandidates = (card) => {
+    if (!deck?.allow_latin_typing) return []
+    const candidates = new Set()
+    const reading = card?.fields?.reading
+    const readText = fieldText(reading)
+    if (readText) candidates.add(readText)
+    if (card?.fields?._latin) candidates.add(String(card.fields._latin))
+    for (const v of Object.values(card?.fields || {})) {
+      if (Array.isArray(v)) {
+        v.forEach(it => {
+          Object.entries(it?.annotations || {}).forEach(([k, val]) => {
+            if (ROMANISATION_KEYS.includes(k) && val) candidates.add(String(val))
+          })
+        })
+      } else if (v && typeof v === 'object') {
+        Object.entries(v).forEach(([k, val]) => {
+          if (ROMANISATION_KEYS.includes(k) && val) candidates.add(String(val))
+        })
+      }
+    }
+    return Array.from(candidates)
+  }
+
+  const bestMatch = (input, expectedList) => {
+    let best = { correct: false, similarity: 0, exact: false }
+    let bestAnswer = expectedList[0] || ''
+    expectedList.forEach(ans => {
+      const r = fuzzyMatch(input, ans || '', { strictAccents, strictMode })
+      if (r.correct || r.similarity > best.similarity) {
+        best = r
+        bestAnswer = ans
+      }
+    })
+    return { ...best, answer: bestAnswer }
+  }
 
   const reviewMutation = useMutation({
     mutationFn: ({ cardId, rating }) => api.recordReview(cardId, rating),
@@ -383,81 +209,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
   // Focus the active input whenever we enter the prompt phase.
   // When animations are off, focus immediately (no transition to wait for).
-  // When animations are on, wait 60ms for the height:auto transition to complete.
-  useEffect(() => {
-    if (phase !== 'prompt') return
-    const delay = animationsEnabled ? 60 : 0
-    const id = setTimeout(() => {
-      if (config.interaction === 'typing') typingInputRef.current?.focus()
-      else if (config.interaction === 'cloze') clozeInputRef.current?.focus()
-    }, delay)
-    return () => clearTimeout(id)
-  }, [phase, config.interaction, animationsEnabled])
-
-  // Cleanup flip timer on unmount
-  useEffect(() => () => { if (flipTimerRef.current) clearTimeout(flipTimerRef.current) }, [])
-
-  const isPassive = config.interaction === 'passive'
-  const isActive  = !isPassive
-
-  const advance = (rating) => {
-    if (!currentCard) return
-    if (mode === 'learn') reviewMutation.mutate({ cardId: currentCard.id, rating })
-    if (!currentCard.seen) api.updateCard(currentCard.id, { seen: true }).catch(() => {})
-    setSessionStats(s => ({
-      reviewed: s.reviewed + 1,
-      correct: s.correct + (rating >= 3 ? 1 : 0),
-      again: s.again + (rating === 1 ? 1 : 0),
-      hard: s.hard + (rating === 2 ? 1 : 0),
-    }))
-    const next = cardIdx + 1
-    if (next >= total) { setDone(true); return }
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
-    setCardIdx(next)
-    setFrontCardIdx(next)
-    if (!animationsEnabled) {
-      setBackCardIdx(next)
-      resetCard()
-      return
-    }
-    setPhase('flipping-back')
-    if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
-    flipTimerRef.current = setTimeout(() => {
-      setBackCardIdx(next)
-      resetCard()
-    }, 500)
-  }
-
-  const advanceActive = () => {
-    if (!currentCard) return
-    if (!currentCard.seen && mode !== 'learn') {
-      api.updateCard(currentCard.id, { seen: true }).catch(() => {})
-    }
-    if (isActive && mode !== 'learn') {
-      const rating = lastResult?.correct ? 3 : 1
-      setSessionStats(s => ({
-        reviewed: s.reviewed + 1,
-        correct: s.correct + (rating >= 3 ? 1 : 0),
-        again: s.again + (rating === 1 ? 1 : 0),
-        hard: 0,
-      }))
-    }
-    const next = cardIdx + 1
-    if (next >= total) { setDone(true); return }
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
-    setCardIdx(next)
-    setFrontCardIdx(next)
-    if (!animationsEnabled) {
-      setBackCardIdx(next)
-      resetCard()
-      return
-    }
-    setPhase('flipping-back')
-    if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
-    flipTimerRef.current = setTimeout(() => {
-      setBackCardIdx(next)
-      resetCard()
-    }, 500)
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   }
 
   const reveal = (result = null) => {
@@ -483,7 +235,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const submitTyping = () => {
     if (!currentCard || phase !== 'prompt') return
     const expected = getAnswer(currentCard, config.direction, blueprint, deck)
-    const result = fuzzyMatch(typingAnswer, expected || '', { strictAccents, strictMode })
+    const expectedList = [expected, ...(config.direction === 'sourceToTarget' ? romanisedCandidates(currentCard) : [])].filter(Boolean)
+    const result = bestMatch(typingAnswer, expectedList)
     reveal({ ...result, answer: expected, typed: typingAnswer })
   }
 
@@ -492,7 +245,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     const fieldVal = currentCard.fields?.[exampleField?.key]
     const raw = fieldText(fieldVal)
     const clozeData = parseCloze(raw)
-    const result = fuzzyMatch(clozeAnswer, clozeData.answer || '', { strictAccents, strictMode })
+    const expectedList = [clozeData.answer, ...(config.direction === 'sourceToTarget' ? romanisedCandidates(currentCard) : [])].filter(Boolean)
+    const result = bestMatch(clozeAnswer, expectedList)
     reveal({ ...result, answer: clozeData.answer, typed: clozeAnswer })
   }
 
@@ -540,48 +294,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col" style={{ minHeight: 'calc(100vh - 60px)' }}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
-        <button className="btn-ghost text-lg leading-none p-1.5 flex-shrink-0" onClick={onEnd} title="Exit">✕</button>
-        <div className="flex-1">
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${sessionProgress}%` }} />
-          </div>
-        </div>
-        <div className="text-xs flex-shrink-0 tabular-nums" style={{ color: 'var(--text-muted)' }}>
-          {cardIdx + 1} / {total}
-        </div>
-        {mode === 'learn' && card && (
-          <div className="text-xs flex-shrink-0 px-2 py-0.5 rounded-full"
-            style={{ background: card.srs_state === 'new' ? 'var(--accent-glow)' : 'rgba(0,212,168,.1)', color: card.srs_state === 'new' ? 'var(--accent-primary)' : 'var(--accent-secondary)' }}>
-            {card.srs_state === 'new' || card.repetitions === 0 ? '✦ New' : '↻ Review'}
-          </div>
-        )}
-      </div>
-
-      {/* Card area */}
-      <div className="flex-1 flex flex-col items-center justify-center gap-5">
-
-        {/* ── The flip card — shown in all modes ── */}
-        <PassiveCard
-          frontCard={frontCard}
-          backCard={backCard}
-          front={front}
-          blueprint={blueprint}
-          flipped={isFlipped}
-          deck={deck}
-          animationsEnabled={animationsEnabled}
-          onFlip={config.interaction === 'passive' ? () => reveal(null) : null}
-          resultBadge={lastResult && isRevealed
-            ? { correct: lastResult.correct, label: lastResult.correct ? `✓ ${Math.round((lastResult.similarity || 1) * 100)}%` : `✗ ${lastResult.answer || ''}` }
-            : null}
-        />
-
-        {/* ── Prompt / input area — collapses to zero height when not in prompt phase ── */}
-        <div className="w-full max-w-lg" style={{
-          transition: 'opacity 0.2s ease, transform 0.2s ease',
-          opacity: isPrompt ? 1 : 0,
-          transform: isPrompt ? 'translateY(0)' : 'translateY(6px)',
-          pointerEvents: isPrompt ? 'auto' : 'none',
-          height: isPrompt ? 'auto' : 0,
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           overflow: 'hidden',
         }}>
           {config.interaction === 'passive' && (
@@ -607,20 +320,10 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 onChange={e => setTypingAnswer(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && submitTyping()}
                 placeholder="Your answer..." data-accent-input="1" />
-              {accentChars.length > 0 && config.direction === 'sourceToTarget' && (
-                <AccentBar chars={accentChars} onInsert={ch => {
-                  const input = typingInputRef.current
-                  if (!input) { setTypingAnswer(prev => prev + ch); return }
-                  const start = input.selectionStart ?? input.value.length
-                  const end = input.selectionEnd ?? input.value.length
-                  const next = input.value.slice(0, start) + ch + input.value.slice(end)
-                  setTypingAnswer(next)
-                  // Restore cursor after React re-render
-                  requestAnimationFrame(() => {
-                    input.focus()
-                    input.setSelectionRange(start + ch.length, start + ch.length)
-                  })
-                }} />
+              {typingAssist && config.direction === 'sourceToTarget' && (
+                <AccentBar assist={typingAssist}
+                  onInsert={ch => insertIntoInput(typingInputRef.current, setTypingAnswer, ch)}
+                  onApplyMark={preset => applyMarkToInput(typingInputRef.current, setTypingAnswer, preset)} />
               )}
               <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
             </div>
@@ -678,19 +381,10 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                   />
                   {clozeData.after}
                 </div>
-                {accentChars.length > 0 && config.direction === 'sourceToTarget' && (
-                  <AccentBar chars={accentChars} onInsert={ch => {
-                    const input = clozeInputRef.current
-                    if (!input) { setClozeAnswer(prev => prev + ch); return }
-                    const start = input.selectionStart ?? input.value.length
-                    const end = input.selectionEnd ?? input.value.length
-                    const next = input.value.slice(0, start) + ch + input.value.slice(end)
-                    setClozeAnswer(next)
-                    requestAnimationFrame(() => {
-                      input.focus()
-                      input.setSelectionRange(start + ch.length, start + ch.length)
-                    })
-                  }} />
+                {typingAssist && config.direction === 'sourceToTarget' && (
+                  <AccentBar assist={typingAssist}
+                    onInsert={ch => insertIntoInput(clozeInputRef.current, setClozeAnswer, ch)}
+                    onApplyMark={preset => applyMarkToInput(clozeInputRef.current, setClozeAnswer, preset)} />
                 )}
                 <button className="btn-primary mt-3 w-full" onClick={submitCloze}>Check</button>
               </div>
@@ -750,30 +444,7 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                     <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{lastResult.answer}</span>
                   </div>
                 </>
-              )}
-            </div>
-          )}
-
-          {/* Active modes: just advance (SRS already recorded) */}
-          {isActive ? (
-            <button ref={continueButtonRef} className="btn-secondary w-full py-3 text-sm" onClick={advanceActive}>
-              Continue <span className="opacity-40 ml-1 text-xs">[Space]</span>
-            </button>
-          ) : mode === 'learn' ? (
-            <div>
-              <div className="section-title text-center mb-3">How well did you know this?</div>
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { rating: 1, label: 'Again', cls: 'again', key: '1' },
-                  { rating: 2, label: 'Hard',  cls: 'hard',  key: '2' },
-                  { rating: 3, label: 'Good',  cls: 'good',  key: '3' },
-                  { rating: 4, label: 'Easy',  cls: 'easy',  key: '4' },
-                ].map(({ rating, label, cls, key }) => (
-                  <button key={rating} className={`rating-btn ${cls}`} onClick={() => advance(rating)}>
-                    <span className="text-xs font-medium">{label}</span>
-                    <span className="text-xs opacity-60">{getNextIntervalLabel(card, rating)}</span>
-                    <span className="text-xs opacity-30">[{key}]</span>
-                  </button>
+function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                 ))}
               </div>
             </div>
@@ -868,31 +539,7 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             {front.word}
           </div>
 
-          {/* Context — shown on targetToSource front to disambiguate homographs.
-              Either a short text hint (context field) or a cloze sentence with blank. */}
-          {front.isTarget && front.clozeSentence && (
-            <div className="mt-3 px-3 py-2 rounded-lg text-center w-full"
-              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-              <div className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)', fontFamily: fontForText(front.clozeSentence.before + front.clozeSentence.after) }}>
-                {front.clozeSentence.before}
-                <span className="px-1.5 rounded font-medium" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>___</span>
-                {front.clozeSentence.after}
-              </div>
-            </div>
-          )}
-          {front.isTarget && front.context && !front.clozeSentence && (
-            <div className="mt-3 px-3 py-1.5 rounded-lg text-center"
-              style={{ background: 'var(--accent-glow)', border: '1px solid rgba(124,106,240,.2)' }}>
-              <div className="text-sm font-medium" style={{ color: 'var(--accent-primary)', fontFamily: fontForText(front.context) }}>
-                {front.context}
-              </div>
-            </div>
-          )}
-
-          {/* show_on_front field — e.g. reading/phonetic */}
-          {front.isTarget && frontField && frontCard?.fields?.[frontField.key] && (
-            <div className="mt-3 text-base" style={{ color: 'var(--text-secondary)', fontFamily: fontForText(frontCard.fields[frontField.key]) }}>
-              {frontCard.fields[frontField.key]}
+function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             </div>
           )}
           {onFlip && (
@@ -1034,35 +681,7 @@ function SessionComplete({ stats, total, mode, onEnd }) {
         {total === 0 ? 'All done!' : 'Session complete!'}
       </h2>
       <div className="text-sm mb-8" style={{ color: 'var(--text-muted)' }}>
-        {total === 0 ? 'No cards available.' : `You reviewed ${stats.reviewed} card${stats.reviewed !== 1 ? 's' : ''}.`}
-      </div>
-
-      {stats.reviewed > 0 && (
-        <div className="card p-5 mb-6">
-          <div className="grid grid-cols-4 gap-3 mb-4">
-            {[
-              { label: 'Reviewed', value: stats.reviewed },
-              { label: 'Correct',  value: stats.correct,  color: 'var(--accent-secondary)' },
-              { label: 'Hard',     value: stats.hard,     color: '#fdcb6e' },
-              { label: 'Again',    value: stats.again,    color: 'var(--accent-danger)' },
-            ].map(s => (
-              <div key={s.label} className="text-center">
-                <div className="font-display text-2xl font-bold" style={{ color: s.color || 'var(--text-primary)' }}>{s.value}</div>
-                <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-          <div className="progress-bar mb-2">
-            <div className="progress-fill" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{pct}% correct</div>
-        </div>
-      )}
-
-      <button className="btn-primary w-full py-3 text-base" onClick={onEnd}>← Back to Setup</button>
-    </div>
-  )
-}
+function SessionComplete({ stats, total, mode, onEnd }) {
 
 // ─────────────────────────────────────────────
 // ACCENT KEYBOARD HELPERS
@@ -1088,86 +707,99 @@ function isLatinExtended(ch) {
   return false
 }
 
-/**
- * Scan target words (card.word) for accented Latin chars.
- * In sourceToTarget mode, users type the target word, so those are
- * the accents they need quick access to.
- * Returns up to 10 sorted by frequency. Returns [] for CJK/etc. decks.
- */
-function extractAccentChars(cards) {
+function extractTypingAssist(cards) {
   if (!cards?.length) return []
 
-  const freq = {}
+  const specialFreq = {}
   for (const card of cards) {
-    const text = card.word
+    const text = card?.word || ''
     if (!text || typeof text !== 'string') continue
     for (const ch of text) {
-      if (isLatinExtended(ch)) {
+      if (isLatinExtended(ch) && ch.normalize('NFD') === ch) {
         const lower = ch.toLowerCase()
-        freq[lower] = (freq[lower] || 0) + 1
+        specialFreq[lower] = (specialFreq[lower] || 0) + 1
       }
     }
   }
 
-  return Object.entries(freq)
+  const specialChars = Object.entries(specialFreq)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, 14)
     .map(([ch]) => ch)
+
+  return { diacritics: getDiacriticPresets(), specialChars }
 }
 
-const ACCENT_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+function applyCombiningMark(value, cursor, preset) {
+  const before = value.slice(0, cursor)
+  const after = value.slice(cursor)
+  const m = before.match(/([\s\S])([\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff]*)$/u)
+  if (!m) return { value, cursor }
+  const base = m[1]
+  const marks = Array.from(m[2] || '')
+  const start = before.length - (base + (m[2] || '')).length
+
+  const nextMarks = marks.filter(mark => {
+    const p = getDiacriticPresets().find(x => x.mark === mark)
+    return !p || p.group !== preset.group
+  })
+  if (!nextMarks.includes(preset.mark)) nextMarks.push(preset.mark)
+
+  const rebuilt = (base + nextMarks.join('')).normalize('NFC')
+  const nextValue = value.slice(0, start) + rebuilt + after
+  const nextCursor = start + rebuilt.length
+  return { value: nextValue, cursor: nextCursor }
+}
 
 /**
- * A row of up to 10 accent character buttons.
- * Clicking or pressing the corresponding number key inserts the character.
+ * Diacritics hotkeys (1-0) transform the previous character.
+ * Special chars are optional one-click inserts (e.g. þ, ð, ł).
  */
-function AccentBar({ chars, onInsert }) {
+function AccentBar({ assist, onInsert, onApplyMark }) {
   useEffect(() => {
-    if (!chars.length) return
+    if (!assist?.diacritics?.length) return
     const handler = (e) => {
-      // Don't fire when typing normally in inputs (only fire for digit keys)
       if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
-      const idx = ACCENT_KEYS.indexOf(e.key)
-      if (idx === -1 || idx >= chars.length) return
-      // Only intercept if target is our study input (has data-accent-input)
+      const idx = DIACRITIC_KEYS.indexOf(e.key)
+      if (idx === -1 || idx >= assist.diacritics.length) return
       if (!e.target.dataset.accentInput) return
       e.preventDefault()
-      onInsert(chars[idx])
+      onApplyMark(assist.diacritics[idx])
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [chars, onInsert])
+  }, [assist, onApplyMark])
 
-  if (!chars.length) return null
+  if (!assist) return null
 
   return (
-    <div className="flex gap-1 flex-wrap mt-2 justify-center">
-      {chars.map((ch, i) => (
-        <button
-          key={ch}
-          type="button"
-          tabIndex={-1}  // don't steal focus from input
-          onClick={() => onInsert(ch)}
-          className="flex flex-col items-center justify-center rounded-lg border transition-all"
-          style={{
-            width: '36px', height: '36px',
-            borderColor: 'var(--border)',
-            background: 'var(--bg-surface)',
-            color: 'var(--text-primary)',
-            fontSize: '14px',
-            position: 'relative',
-          }}
-          title={`Insert "${ch}" (press ${ACCENT_KEYS[i]})`}
-        >
-          {ch}
-          <span style={{
-            position: 'absolute', bottom: '1px', right: '3px',
-            fontSize: '8px', color: 'var(--text-muted)', lineHeight: 1,
-          }}>
-            {ACCENT_KEYS[i]}
-          </span>
-        </button>
-      ))}
+    <div className="space-y-1.5 mt-2">
+      <div className="flex gap-1 flex-wrap justify-center">
+        {assist.diacritics.map((d) => (
+          <button
+            key={d.key}
+            type="button"
+            tabIndex={-1}
+            onClick={() => onApplyMark(d)}
+            className="flex flex-col items-center justify-center rounded-lg border transition-all"
+            style={{ width: '36px', height: '36px', borderColor: 'var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', fontSize: '14px', position: 'relative' }}
+            title={`Apply ${d.label} to previous character (press ${d.key})`}>
+            ◌{d.label}
+            <span style={{ position: 'absolute', bottom: '1px', right: '3px', fontSize: '8px', color: 'var(--text-muted)', lineHeight: 1 }}>{d.key}</span>
+          </button>
+        ))}
+      </div>
+      {assist.specialChars?.length > 0 && (
+        <div className="flex gap-1 flex-wrap justify-center">
+          {assist.specialChars.map(ch => (
+            <button key={ch} type="button" tabIndex={-1} onClick={() => onInsert(ch)}
+              className="rounded-lg border px-2 py-1 text-sm"
+              style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
+              {ch}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

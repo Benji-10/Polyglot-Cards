@@ -174,6 +174,7 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
 
   // Build expected output keys list for the prompt footer
   const exampleKeys = ['word', '_meanings', '_sense']
+  if (allowLatinTyping) exampleKeys.push('_latin')
   blueprint.forEach(f => {
     const annotationKeys = getPhoneticKeys(f.phonetics)
     if (annotationKeys.length > 0 || f.field_type === 'example') {
@@ -206,6 +207,7 @@ For each vocabulary item (or each meaning if a homograph), generate a JSON objec
   - "word": the vocabulary item EXACTLY as given — no extra text, no parentheses
   - "_meanings": integer
   - "_sense": string (empty if only one meaning)
+${allowLatinTyping ? `  - "_latin": Latin-script romanisation for typing input (romaji/pinyin/transliteration).` : ''}
 ${fieldLines}
 
 Rules:
@@ -238,6 +240,7 @@ export const handler = async (event) => {
     const targetLanguage  = vocab.targetLanguage  || ''
     const sourceLanguage  = vocab.sourceLanguage  || 'English'
     const contextLanguage = vocab.contextLanguage || 'target'
+    const allowLatinTyping = vocab.allowLatinTyping === true
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return error('Gemini API key not configured', 500)
@@ -259,9 +262,9 @@ export const handler = async (event) => {
 
       // On parse failures, rebuild prompt with extra JSON strictness instruction
       const prompt = parseFailures > 0
-        ? buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
+        ? buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray, allowLatinTyping)
             + '\n\nCRITICAL: Your previous response failed JSON parsing. Output ONLY the raw JSON array. Absolutely no text before or after the array. No markdown. No explanation. Start your response with [ and end with ].'
-        : buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
+        : buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray, allowLatinTyping)
 
       let geminiRes
       try {

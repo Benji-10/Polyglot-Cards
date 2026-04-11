@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS decks (
   context_language TEXT DEFAULT 'target', -- 'target' = context in target lang, 'source' = source lang
   strict_accents   BOOLEAN DEFAULT true,  -- require exact accent marks when typing
   strict_mode      BOOLEAN DEFAULT false, -- require exact match (no fuzzy)
+  allow_latin_typing BOOLEAN DEFAULT false, -- accept romanised answers for non-Latin scripts
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -24,6 +25,7 @@ ALTER TABLE decks ADD COLUMN IF NOT EXISTS source_language TEXT DEFAULT 'English
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS context_language TEXT DEFAULT 'target';
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_accents BOOLEAN DEFAULT true;
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_mode BOOLEAN DEFAULT false;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS allow_latin_typing BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS decks_user_id ON decks(user_id);
 
@@ -102,3 +104,4 @@ CREATE TABLE IF NOT EXISTS user_settings (
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_accents BOOLEAN DEFAULT true;
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS strict_mode BOOLEAN DEFAULT false;
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS context_language TEXT DEFAULT 'target';
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS allow_latin_typing BOOLEAN DEFAULT false;

@@ -178,8 +178,8 @@ function EmptyState({ onCreate }) {
 function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
   const [form, setForm] = useState(
     deck
-      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto', context_language: deck.context_language || 'target', strict_accents: deck.strict_accents !== false, strict_mode: deck.strict_mode === true }
-      : { name: '', target_language: '', source_language: defaultSource || 'English', description: '', card_front_field: 'auto', context_language: 'target', strict_accents: true, strict_mode: false }
+      ? { name: deck.name, target_language: deck.target_language, source_language: deck.source_language || defaultSource || 'English', description: deck.description || '', card_front_field: deck.card_front_field || 'auto', context_language: deck.context_language || 'target', strict_accents: deck.strict_accents !== false, strict_mode: deck.strict_mode === true, allow_latin_typing: deck.allow_latin_typing === true }
+      : { name: '', target_language: '', source_language: defaultSource || 'English', description: '', card_front_field: 'auto', context_language: 'target', strict_accents: true, strict_mode: false, allow_latin_typing: false }
   )
 
   const isEdit = !!deck
@@ -265,6 +265,14 @@ function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Exact spelling required — no typo tolerance</div>
               </div>
               <ToggleSwitch value={form.strict_mode} onChange={v => setForm(f => ({ ...f, strict_mode: v }))} />
+            </label>
+            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+              <div>
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Allow Latin typing</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Accept romanised answers (romaji/pinyin/romanisation) for non-Latin scripts</div>
+              </div>
+              <ToggleSwitch value={form.allow_latin_typing} onChange={v => setForm(f => ({ ...f, allow_latin_typing: v }))} />
             </label>
           </div>
         </div>
