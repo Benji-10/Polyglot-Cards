@@ -1,28 +1,8 @@
-// Shared utility functions
-
-// ── Language helpers ───────────────────────────────────────
 export const LANGUAGE_FLAGS = {
-  'English':             '🇬🇧',
-  'Korean':              '🇰🇷',
-  'Japanese':            '🇯🇵',
-  'Chinese (Mandarin)':  '🇨🇳',
-  'Chinese (Cantonese)': '🇭🇰',
-  'Arabic':              '🇸🇦',
-  'Russian':             '🇷🇺',
-  'Thai':                '🇹🇭',
-  'Vietnamese':          '🇻🇳',
-  'Hindi':               '🇮🇳',
-  'Greek':               '🇬🇷',
-  'Turkish':             '🇹🇷',
-  'Polish':              '🇵🇱',
-  'Dutch':               '🇳🇱',
-  'Swedish':             '🇸🇪',
-  'Hebrew':              '🇮🇱',
-  'Portuguese':          '🇵🇹',
-  'Italian':             '🇮🇹',
-  'Spanish':             '🇪🇸',
-  'French':              '🇫🇷',
-  'German':              '🇩🇪',
+  'English':'🇬🇧','Korean':'🇰🇷','Japanese':'🇯🇵','Chinese (Mandarin)':'🇨🇳','Chinese (Cantonese)':'🇭🇰',
+  'Arabic':'🇸🇦','Russian':'🇷🇺','Thai':'🇹🇭','Vietnamese':'🇻🇳','Hindi':'🇮🇳','Greek':'🇬🇷',
+  'Turkish':'🇹🇷','Polish':'🇵🇱','Dutch':'🇳🇱','Swedish':'🇸🇪','Hebrew':'🇮🇱','Portuguese':'🇵🇹',
+  'Italian':'🇮🇹','Spanish':'🇪🇸','French':'🇫🇷','German':'🇩🇪',
 }
 
 export function getLanguageFlag(lang) {
@@ -35,14 +15,10 @@ export function getLanguageFlag(lang) {
 
 export const LANGUAGES = Object.keys(LANGUAGE_FLAGS).concat(['Other'])
 
-// ── Date helpers ───────────────────────────────────────────
 export function formatDueDate(dateStr) {
   if (!dateStr) return '—'
   const date = new Date(dateStr)
-  const now = new Date()
-  const diffMs = date - now
-  const diffDays = Math.round(diffMs / 86400000)
-
+  const diffDays = Math.round((date - new Date()) / 86400000)
   if (diffDays < 0) return 'Overdue'
   if (diffDays === 0) return 'Today'
   if (diffDays === 1) return 'Tomorrow'
@@ -55,42 +31,23 @@ export function formatDueDate(dateStr) {
 export function formatRelativeDate(dateStr) {
   if (!dateStr) return '—'
   const date = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now - date
-  const diffDays = Math.round(diffMs / 86400000)
-
+  const diffDays = Math.round((new Date() - date) / 86400000)
   if (diffDays === 0) return 'Today'
   if (diffDays === 1) return 'Yesterday'
   if (diffDays < 7) return `${diffDays}d ago`
   return date.toLocaleDateString()
 }
 
-// ── SRS state helpers ──────────────────────────────────────
-export const SRS_STATE_LABELS = {
-  new: 'New',
-  learning: 'Learning',
-  review: 'Review',
-  relearning: 'Relearning',
-}
+export const SRS_STATE_LABELS = { new:'New', learning:'Learning', review:'Review', relearning:'Relearning' }
+export const SRS_STATE_COLORS = { new:'var(--text-muted)', learning:'#fdcb6e', review:'var(--accent-secondary)', relearning:'var(--accent-danger)' }
 
-export const SRS_STATE_COLORS = {
-  new: 'var(--text-muted)',
-  learning: '#fdcb6e',
-  review: 'var(--accent-secondary)',
-  relearning: 'var(--accent-danger)',
-}
-
-// ── CJK detection ──────────────────────────────────────────
-export function containsCJK(str) {
-  return /[\u3000-\u9fff\uac00-\ud7ff\u4e00-\u9fff\u3040-\u30ff]/.test(str)
-}
-
+export function containsCJK(str) { return /[\u3000-\u9fff\uac00-\ud7ff\u4e00-\u9fff\u3040-\u30ff]/.test(str) }
 export function fontForText(text) {
-  if (containsCJK(text)) return '"Noto Sans SC", "Noto Sans CJK SC", sans-serif'
+  if (!text) return '"DM Sans", sans-serif'
+  if (containsCJK(String(text))) return '"Noto Sans SC", "Noto Sans CJK SC", sans-serif'
   return '"DM Sans", sans-serif'
 }
 
-// ── Array helpers ──────────────────────────────────────────
 export function shuffle(arr) {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -100,7 +57,4 @@ export function shuffle(arr) {
   return a
 }
 
-// ── Class names ────────────────────────────────────────────
-export function cn(...classes) {
-  return classes.filter(Boolean).join(' ')
-}
+export function cn(...classes) { return classes.filter(Boolean).join(' ') }

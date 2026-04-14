@@ -13,21 +13,12 @@ export const handler = async (event) => {
       if (!deckId) return error('deckId required')
       const { rows: deck } = await query('SELECT id FROM decks WHERE id=$1 AND user_id=$2', [deckId, userId])
       if (!deck.length) return error('Deck not found', 404)
-
-      const { rows } = await query(
-        'SELECT * FROM blueprint_fields WHERE deck_id=$1 ORDER BY position ASC',
-        [deckId]
-      )
-      // Ensure phonetics is always a parsed array regardless of Postgres driver behaviour
+      const { rows } = await query('SELECT * FROM blueprint_fields WHERE deck_id=$1 ORDER BY position ASC', [deckId])
       const parsed = rows.map(r => ({
         ...r,
-        phonetics: Array.isArray(r.phonetics)
-          ? r.phonetics
-          : r.phonetics && typeof r.phonetics === 'object'
-            ? r.phonetics  // already a parsed JS object from JSONB
-            : typeof r.phonetics === 'string'
-              ? JSON.parse(r.phonetics)
-              : [],
+        phonetics: Array.isArray(r.phonetics) ? r.phonetics
+          : r.phonetics && typeof r.phonetics === 'object' ? r.phonetics
+          : typeof r.phonetics === 'string' ? JSON.parse(r.phonetics) : [],
       }))
       return json(parsed)
     }
@@ -35,35 +26,23 @@ export const handler = async (event) => {
     if (method === 'POST') {
       const { deckId, fields } = JSON.parse(event.body)
       if (!deckId || !fields) return error('deckId and fields required')
-
       const { rows: deck } = await query('SELECT id FROM decks WHERE id=$1 AND user_id=$2', [deckId, userId])
       if (!deck.length) return error('Deck not found', 404)
-
-      // Replace all fields for this deck
       await query('DELETE FROM blueprint_fields WHERE deck_id=$1', [deckId])
-
       for (let i = 0; i < fields.length; i++) {
         const f = fields[i]
         await query(
-          `INSERT INTO blueprint_fields (deck_id, key, label, description, field_type, position, show_on_front, phonetics)
+          `INSERT INTO blueprint_fields (deck_id,key,label,description,field_type,position,show_on_front,phonetics)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [deckId, f.key, f.label, f.description || '', f.field_type || 'text', i, f.show_on_front || false, f.phonetics || []]
+          [deckId, f.key, f.label, f.description||'', f.field_type||'text', i, f.show_on_front||false, JSON.stringify(f.phonetics||[])]
         )
       }
-
-      const { rows } = await query(
-        'SELECT * FROM blueprint_fields WHERE deck_id=$1 ORDER BY position ASC',
-        [deckId]
-      )
+      const { rows } = await query('SELECT * FROM blueprint_fields WHERE deck_id=$1 ORDER BY position ASC', [deckId])
       const normalised = rows.map(r => ({
         ...r,
-        phonetics: Array.isArray(r.phonetics)
-          ? r.phonetics
-          : r.phonetics && typeof r.phonetics === 'object'
-            ? r.phonetics
-            : typeof r.phonetics === 'string'
-              ? JSON.parse(r.phonetics)
-              : [],
+        phonetics: Array.isArray(r.phonetics) ? r.phonetics
+          : r.phonetics && typeof r.phonetics === 'object' ? r.phonetics
+          : typeof r.phonetics === 'string' ? JSON.parse(r.phonetics) : [],
       }))
       return json(normalised)
     }

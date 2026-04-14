@@ -12,33 +12,18 @@ import StudyPage from './pages/StudyPage'
 import CollectionPage from './pages/CollectionPage'
 import SettingsPage from './pages/SettingsPage'
 
-// ── Offline polling ────────────────────────────────────────
-// Browser online/offline events are unreliable — ping a cached static asset instead.
 function OfflineWatcher() {
   const toast = useToast()
   useEffect(() => {
     let wasOffline = false
-    let toastId = null
-
     const check = async () => {
       try {
         await fetch('/favicon.ico', { method: 'HEAD', cache: 'no-store' })
-        if (wasOffline) {
-          toast.success('Back online!', { duration: 3000 })
-          wasOffline = false
-          toastId = null
-        }
+        if (wasOffline) { toast.success('Back online!', { duration: 3000 }); wasOffline = false }
       } catch {
-        if (!wasOffline) {
-          wasOffline = true
-          toastId = toast.warning(
-            "You appear to be offline — changes won't sync until reconnected.",
-            { duration: 60000 }
-          )
-        }
+        if (!wasOffline) { wasOffline = true; toast.warning("You appear to be offline — changes won't sync until reconnected.", { duration: 60000 }) }
       }
     }
-
     check()
     const id = setInterval(check, 30000)
     return () => clearInterval(id)
@@ -46,45 +31,30 @@ function OfflineWatcher() {
   return null
 }
 
-// ── Cloud settings sync ────────────────────────────────────
-// On mount: pull cloud settings and merge into local store.
-// On every settings change: debounce-push to cloud.
-//
-// We sync the entire `settings` object (theme, customTheme, quickAddFields, etc.)
-// so any device that logs in gets the same experience immediately.
 function CloudSettingsSync() {
   const { updateSettings, settings } = useAppStore()
   const pushTimer = useRef(null)
-  // Track whether the current settings change came from a cloud pull (don't push back)
-  const isPulling = useRef(true) // start true — suppress push on initial mount
+  const isPulling = useRef(true)
 
-  // Load on mount — pull cloud and merge (cloud wins over stale localStorage)
   useEffect(() => {
     let cancelled = false
     api.getCloudSettings()
       .then(cloud => {
         if (cancelled || !cloud || Object.keys(cloud).length === 0) return
-        isPulling.current = true   // mark as pull so push useEffect skips
+        isPulling.current = true
         updateSettings(cloud)
         if (cloud.theme) applyTheme(cloud.theme, cloud.customTheme)
       })
-      .catch(() => {/* offline or not set up yet — silently use local */})
-      .finally(() => {
-        if (!cancelled) isPulling.current = false
-      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) isPulling.current = false })
     return () => { cancelled = true }
   }, []) // eslint-disable-line
 
-  // Push on every settings change (debounced 1.5s, skip pulls)
   useEffect(() => {
-    if (isPulling.current) {
-      // Reset flag after the pull-triggered render completes
-      isPulling.current = false
-      return
-    }
+    if (isPulling.current) { isPulling.current = false; return }
     if (pushTimer.current) clearTimeout(pushTimer.current)
     pushTimer.current = setTimeout(() => {
-      api.saveCloudSettings(settings).catch(() => {/* offline — local store is the fallback */})
+      api.saveCloudSettings(settings).catch(() => {})
     }, 1500)
     return () => clearTimeout(pushTimer.current)
   }, [settings])
@@ -92,29 +62,20 @@ function CloudSettingsSync() {
   return null
 }
 
-// Applies/removes data-no-animations on <html> so CSS can suppress all transitions
 function AnimationController() {
   const { settings } = useAppStore()
   useEffect(() => {
-    if (settings.animationsEnabled === false) {
-      document.documentElement.setAttribute('data-no-animations', '')
-    } else {
-      document.documentElement.removeAttribute('data-no-animations')
-    }
+    if (settings.animationsEnabled === false) document.documentElement.setAttribute('data-no-animations', '')
+    else document.documentElement.removeAttribute('data-no-animations')
   }, [settings.animationsEnabled])
   return null
 }
 
 export default function App() {
   const { user, loading, getToken } = useAuth()
-
-  useEffect(() => {
-    setTokenProvider(getToken)
-  }, [getToken])
-
+  useEffect(() => { setTokenProvider(getToken) }, [getToken])
   if (loading) return <LoadingScreen />
   if (!user) return <AuthGate />
-
   return (
     <ToastProvider>
       <OfflineWatcher />
@@ -138,9 +99,7 @@ function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg-primary)' }}>
       <div className="text-center">
-        <div className="text-5xl font-display font-bold mb-3 animate-pulse" style={{ color: 'var(--accent-primary)' }}>
-          多言語
-        </div>
+        <div className="text-5xl font-display font-bold mb-3 animate-pulse" style={{ color: 'var(--accent-primary)' }}>多言語</div>
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading...</div>
       </div>
     </div>

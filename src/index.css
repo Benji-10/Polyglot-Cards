@@ -21,239 +21,51 @@
     --shadow-card: 0 4px 24px rgba(0,0,0,0.4);
     --shadow-elevated: 0 8px 48px rgba(0,0,0,0.6);
   }
-
   * { box-sizing: border-box; }
-
-  body {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: 'DM Sans', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* Subtle noise texture overlay */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    z-index: 0;
-  }
-
+  body { background-color: var(--bg-primary); color: var(--text-primary); font-family: 'DM Sans', sans-serif; min-height: 100vh; overflow-x: hidden; }
+  body::before { content: ''; position: fixed; inset: 0; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E"); pointer-events: none; z-index: 0; }
   #root { position: relative; z-index: 1; }
-
-  /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: var(--bg-surface); }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
-  /* Selection */
   ::selection { background: var(--accent-glow); color: var(--text-primary); }
-
-  /* CJK text rendering */
-  .cjk { font-family: 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif; }
 }
 
 @layer components {
-  .glass {
-    background: rgba(26, 26, 58, 0.6);
-    backdrop-filter: blur(12px);
-    border: 1px solid var(--border);
-  }
-
-  .glass-elevated {
-    background: rgba(34, 34, 74, 0.8);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(124, 106, 240, 0.2);
-  }
-
-  .btn-primary {
-    @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200;
-    background: linear-gradient(135deg, #7c6af0, #5a48d0);
-    color: white;
-    box-shadow: 0 0 20px rgba(124, 106, 240, 0.3);
-  }
-  .btn-primary:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 0 30px rgba(124, 106, 240, 0.5);
-  }
+  .btn-primary { @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200; background: linear-gradient(135deg,#7c6af0,#5a48d0); color: white; box-shadow: 0 0 20px rgba(124,106,240,0.3); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 0 30px rgba(124,106,240,0.5); }
   .btn-primary:active { transform: translateY(0); }
-
-  .btn-secondary {
-    @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200;
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover {
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-  }
-
-  .btn-ghost {
-    @apply px-3 py-2 rounded-lg text-sm transition-all duration-200;
-    color: var(--text-secondary);
-  }
-  .btn-ghost:hover {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-  }
-
-  .btn-danger {
-    @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200;
-    background: rgba(225, 112, 85, 0.15);
-    color: #e17055;
-    border: 1px solid rgba(225, 112, 85, 0.3);
-  }
-  .btn-danger:hover {
-    background: rgba(225, 112, 85, 0.25);
-    box-shadow: 0 0 20px rgba(225, 112, 85, 0.2);
-  }
-
-  .input {
-    @apply w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all duration-200;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    caret-color: var(--accent-primary);
-  }
-  .input:focus {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px rgba(124, 106, 240, 0.1);
-  }
+  .btn-secondary { @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+  .btn-ghost { @apply px-3 py-2 rounded-lg text-sm transition-all duration-200; color: var(--text-secondary); }
+  .btn-ghost:hover { background: var(--bg-elevated); color: var(--text-primary); }
+  .btn-danger { @apply px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200; background: rgba(225,112,85,0.15); color: #e17055; border: 1px solid rgba(225,112,85,0.3); }
+  .btn-danger:hover { background: rgba(225,112,85,0.25); box-shadow: 0 0 20px rgba(225,112,85,0.2); }
+  .input { @apply w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all duration-200; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-primary); caret-color: var(--accent-primary); }
+  .input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(124,106,240,0.1); }
   .input::placeholder { color: var(--text-muted); }
-
-  .card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card);
-  }
-
-  .card-elevated {
-    background: var(--bg-elevated);
-    border: 1px solid rgba(124, 106, 240, 0.15);
-    border-radius: 20px;
-    box-shadow: var(--shadow-elevated);
-  }
-
-  .tag {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-  }
-
-  .section-title {
-    @apply text-xs font-semibold uppercase tracking-widest;
-    color: var(--text-muted);
-  }
-
-  /* Flashcard flip */
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); }
+  .card-elevated { background: var(--bg-elevated); border: 1px solid rgba(124,106,240,0.15); border-radius: 20px; box-shadow: var(--shadow-elevated); }
+  .tag { @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-secondary); }
+  .section-title { @apply text-xs font-semibold uppercase tracking-widest; color: var(--text-muted); }
   .card-3d { perspective: 1200px; }
-  .card-inner {
-    transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-    transform-style: preserve-3d;
-    position: relative;
-  }
+  .card-inner { transition: transform 0.5s cubic-bezier(0.4,0,0.2,1); transform-style: preserve-3d; position: relative; }
   .card-inner.flipped { transform: rotateY(180deg); }
-  .card-face {
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    position: absolute;
-    inset: 0;
-  }
+  .card-face { backface-visibility: hidden; -webkit-backface-visibility: hidden; position: absolute; inset: 0; }
   .card-back { transform: rotateY(180deg); }
-
-  /* Progress bar */
-  .progress-bar {
-    height: 4px;
-    border-radius: 2px;
-    background: var(--bg-elevated);
-    overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
-    /* No CSS transition — RAF drives width directly via DOM ref */
-  }
-  /* Import progress bar specifically — also no transition */
-  .import-progress-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
-  }
-
-  /* Custom checkbox */
-  input[type="checkbox"] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 5px;
-    border: 1.5px solid var(--border);
-    background: var(--bg-surface);
-    cursor: pointer;
-    position: relative;
-    flex-shrink: 0;
-    transition: all 0.15s ease;
-  }
-  input[type="checkbox"]:checked {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-  }
-  input[type="checkbox"]:checked::after {
-    content: '';
-    position: absolute;
-    left: 4px;
-    top: 1.5px;
-    width: 5px;
-    height: 9px;
-    border: 2px solid white;
-    border-top: none;
-    border-left: none;
-    transform: rotate(45deg);
-  }
-  input[type="checkbox"]:hover:not(:checked) {
-    border-color: var(--accent-primary);
-  }
-
-  /* Collapsible panel transition */
-  .collapsible-panel {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    overflow: hidden;
-  }
-  .collapsible-panel.open {
-    grid-template-rows: 1fr;
-  }
-  .collapsible-panel > .collapsible-inner {
-    overflow: hidden;
-  }
-
-  /* Reorder transition for list items */
-  .reorder-item {
-    transition: transform 0.2s ease, opacity 0.2s ease;
-  }
-
-  /* Shimmer loading */
-  .shimmer {
-    background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 50%, var(--bg-card) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-  }
-
-  /* FSRS rating buttons */
-  .rating-btn {
-    @apply flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all duration-200 font-medium;
-    border: 1px solid var(--border);
-    background: var(--bg-surface);
-  }
+  .progress-bar { height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg,var(--accent-primary),var(--accent-secondary)); }
+  .import-progress-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg,var(--accent-primary),var(--accent-secondary)); }
+  input[type="checkbox"] { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--border); background: var(--bg-surface); cursor: pointer; position: relative; flex-shrink: 0; transition: all 0.15s ease; }
+  input[type="checkbox"]:checked { background: var(--accent-primary); border-color: var(--accent-primary); }
+  input[type="checkbox"]:checked::after { content: ''; position: absolute; left: 4px; top: 1.5px; width: 5px; height: 9px; border: 2px solid white; border-top: none; border-left: none; transform: rotate(45deg); }
+  input[type="checkbox"]:hover:not(:checked) { border-color: var(--accent-primary); }
+  .collapsible-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s cubic-bezier(0.4,0,0.2,1); overflow: hidden; }
+  .collapsible-panel.open { grid-template-rows: 1fr; }
+  .collapsible-panel > .collapsible-inner { overflow: hidden; }
+  .shimmer { background: linear-gradient(90deg,var(--bg-card) 25%,var(--bg-elevated) 50%,var(--bg-card) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+  .rating-btn { @apply flex flex-col items-center gap-1 px-4 py-3 rounded-xl transition-all duration-200 font-medium; border: 1px solid var(--border); background: var(--bg-surface); }
   .rating-btn:hover { transform: translateY(-2px); }
   .rating-btn.again { color: #e17055; border-color: rgba(225,112,85,0.4); }
   .rating-btn.again:hover { background: rgba(225,112,85,0.1); box-shadow: 0 4px 20px rgba(225,112,85,0.2); }
@@ -263,44 +75,18 @@
   .rating-btn.good:hover { background: rgba(0,212,168,0.1); box-shadow: 0 4px 20px rgba(0,212,168,0.2); }
   .rating-btn.easy { color: #7c6af0; border-color: rgba(124,106,240,0.4); }
   .rating-btn.easy:hover { background: rgba(124,106,240,0.1); box-shadow: 0 4px 20px rgba(124,106,240,0.2); }
-
-  /* Cloze input */
-  .cloze-input {
-    display: inline-block;
-    border: none;
-    border-bottom: 2px solid var(--accent-primary);
-    background: transparent;
-    color: var(--text-primary);
-    outline: none;
-    font-size: inherit;
-    font-family: inherit;
-    text-align: center;
-    min-width: 2em;
-    caret-color: var(--accent-primary);
-  }
+  .cloze-input { display: inline-block; border: none; border-bottom: 2px solid var(--accent-primary); background: transparent; color: var(--text-primary); outline: none; font-size: inherit; font-family: inherit; text-align: center; min-width: 2em; caret-color: var(--accent-primary); }
   .cloze-input.correct { border-bottom-color: #00d4a8; color: #00d4a8; }
   .cloze-input.incorrect { border-bottom-color: #e17055; color: #e17055; }
 }
 
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .animate-slide-up { animation: slideUp 0.3s ease-out forwards; }
 .animate-fade-in { animation: fadeIn 0.2s ease-out forwards; }
 
-/* Stagger children */
 .stagger-children > * { opacity: 0; animation: slideUp 0.3s ease-out forwards; }
 .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
 .stagger-children > *:nth-child(2) { animation-delay: 50ms; }
@@ -309,9 +95,6 @@
 .stagger-children > *:nth-child(5) { animation-delay: 200ms; }
 .stagger-children > *:nth-child(6) { animation-delay: 250ms; }
 
-/* ── No-animations mode ──────────────────────────────────────
-   Set by AnimationController when settings.animationsEnabled is false.
-   Suppresses all CSS transitions, animations, and the card flip. */
 html[data-no-animations] *,
 html[data-no-animations] *::before,
 html[data-no-animations] *::after {
@@ -320,10 +103,5 @@ html[data-no-animations] *::after {
   transition-duration: 0.001ms !important;
   transition-delay: 0ms !important;
 }
-html[data-no-animations] .card-inner {
-  transition: none !important;
-}
-html[data-no-animations] .stagger-children > * {
-  opacity: 1 !important;
-  animation: none !important;
-}
+html[data-no-animations] .card-inner { transition: none !important; }
+html[data-no-animations] .stagger-children > * { opacity: 1 !important; animation: none !important; }

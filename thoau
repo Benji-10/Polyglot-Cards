@@ -1,0 +1,82 @@
+[33m466843e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;32mupdate-annotations-to-trigger-gemini-qka5do[m[33m)[m Add default strictMode in general settings - Add direct CSV import and export - Update context field to be shown on card - Update default quick add setting to be more general
+[33me32d089[m Made key field a generated field - Centred accent keyboard
+[33mcb37aaf[m Fix malformed generateCards function
+[33mf88a10c[m Fix card layout - Fix focus bug - Add cloud sync to settings - Add collision detection checking
+[33m1cec472[m Fix StudyPage crash - Fix keyboard advance - Fix blueprint update triggering regen - Fix accent typing to grab only translation text
+[33me08d6c3[m Turn on sourcemap in vite for debugging
+[33m0bebb8f[m Fix FSRS-5 algorithm - Change fuzzy matching algorithm to Damerau-Levenshtein - Add option to ignore accents - Add mandatory source-translation and context fields - Changed cards to use source_translation for straightforward matching - Fix bug where answer is shown while the card is being flipped
+[33mf357b8c[m Add multiple example sentences - Add homograph detection - Fix special character keyboard
+[33m2a65e9c[m Add multiple example sentences - Add homograph detection - Fix special character keyboard
+[33mbf590eb[m Add special characters keyboard - Fix card input focus
+[33m7625c90[m Add exponential backoff retry to Gemini
+[33m85a85e1[m Add exponential backoff retry to Gemini
+[33mf54b965[m Merge branch 'master' of https://github.com/Benji-10/Polyglot-Cards
+[33mfdadfb8[m Update blueprint modification - Fix cellection page bug - Fix card UI
+[33m01bab76[m Fix cloze so it's no longer giving the answers
+[33mc50a6fe[m Fix active modes UX
+[33mb271cc1[m Add dynamic favicon directly inline
+[33m49001e5[m Delete public/images directory
+[33mc7978eb[m Readd new themes - Readd dynamic favicon
+[33m0bcb60b[m Fix phonetics bug
+[33m2d65184[m Add regeneration on blueprint update - Fix auto progress on active modes
+[33m6c56204[m Add regeneration on blueprint update - Fix auto progress on active modes
+[33m2335493[m Update cloze hint styling
+[33mce13be1[m Fix cloze hint
+[33mbd5b07b[m Fix card not showing answer on active study modes - Add cloze context to display the question to user
+[33m840a356[m Change favicon colour
+[33md2d6d25[m Fix dynamic favicon
+[33mc8a2049[m Fix dynamic favicon
+[33madcbf9c[m Debug favicon
+[33m4b889a3[m Debug favicon
+[33mb1ca468[m Add dynamic favicon colour
+[33m137c3f9[m Update favicon colour
+[33m365ec43[m Add favicon
+[33m958c92b[m Create favicon
+[33m9491eef[m Fix add more themes
+[33mc273dc6[m Add persistent study settings
+[33mb99d9bc[m Add persistent study settings
+[33m74398d4[m Fix settings UI
+[33m9da9318[m Fix progress bar
+[33m8fb5695[m Add custom check box styling
+[33m72c25df[m Update settings page to add more settings - Fix progress bar to be more smooth
+[33m22a7d0e[m Add more themes
+[33m1a0b76d[m Add more themes
+[33m5e303d4[m Fix theme UI issue
+[33m4a6ef69[m Fix theme UI issue
+[33m142fae5[m Add more themes
+[33m9bb8601[m Add more themes
+[33me80c78a[m Add dumy settings
+[33mac9e3ba[m Add source language API handling
+[33m8aeb493[m Add source language to schema
+[33m66c15bb[m Add source language field to form
+[33ma42fee2[m Update to handle more phonetics
+[33med008ca[m Update phonetics UI
+[33m2bfd3e7[m Fix ruby rendering
+[33me030c32[m Add quick fields settings - Add default source language
+[33meb159ee[m Fix phonetics data type
+[33m1a44e77[m Fix phonetics data type
+[33m5f59073[m Fix phonetics data type
+[33mefa1b71[m Fix variable name
+[33m417231d[m Fix JSON parsing
+[33mf068f48[m Add phonetics - Fix UX
+[33m9248289[m Add debug print - Change batch size
+[33m407be27[m Change Gemini API to Gemini 3.1 Flash Lite Preview
+[33m368edde[m Resolved merge
+[33m3cf65a2[m Merge branch 'master' of https://github.com/Benji-10/Polyglot-Cards Remove comments
+[33mde7b79a[m Add RubyText.jsx
+[33m93671c8[m Remove RubyText reference
+[33m994395c[m Remove RubyText.jsx reference
+[33m5cf25cb[m Fix progress interpolation - Add phonetic ruby annotations - Improve collection UI/UX
+[33m1bd8760[m Fix progress bar and frontend batching
+[33mdf82767[m Fix undefined error
+[33mb2ae9e0[m Add dynamic loading bar + use average batch times to interpolate estimate times
+[33ma698c50[m Add batching to comply with gateway timings
+[33mc488141[m Change Gemini model
+[33ma9da0bd[m Fix backend card generater handler
+[33mac9725f[m Debug script for Gemini API
+[33m0494de2[m Fix blueprint page & update settings page
+[33m3f67e43[m Fix for 401 error
+[33mf533976[m Debug function
+[33m1deef56[m Fixed 401 Error
+[33m8029146[m Complete project
+[33m3bc74ee[m[33m ([m[1;32mMain[m[33m)[m Initial commit

@@ -1,120 +1,35 @@
 import { requireUser, json, error, handleCors } from './_db.js'
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent'
 
-// Strict JSON repair — strip markdown fences, fix common truncation
 function cleanAndParse(text) {
   let cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
-  // Sometimes Gemini truncates — try to close the array
   if (!cleaned.endsWith(']')) {
     const lastBrace = cleaned.lastIndexOf('}')
     const lastComma = cleaned.lastIndexOf(',')
     if (lastBrace > lastComma) cleaned = cleaned.slice(0, lastBrace + 1) + ']'
-    else if (lastComma > 0)   cleaned = cleaned.slice(0, lastComma) + ']'
-    else                      cleaned += ']'
+    else if (lastComma > 0) cleaned = cleaned.slice(0, lastComma) + ']'
+    else cleaned += ']'
   }
   return JSON.parse(cleaned)
 }
 
-// Strip sense hints appended by regen ("word (sense)") from the word field
 function stripSenseHint(word) {
   if (!word) return word
   const m = word.match(/^(.+?)\s*\([^)]+\)$/)
   return m ? m[1].trim() : word.trim()
 }
 
-function getPhoneticKeys(ph) {
-  if (!ph) return []
-  if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
-  const keys = []
-  if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
-  if (Array.isArray(ph.extras)) keys.push(...ph.extras)
-  return keys
-}
-
-function splitMulti(text) {
-  return String(text || '').split(' ;;; ').map(s => s.trim()).filter(Boolean)
-}
-
-function normaliseAnnotatedValue(rawVal, annotationMap = {}, isExample = false) {
-  // Already in target shape
-  if (Array.isArray(rawVal)) {
-    return rawVal
-      .map(it => {
-        if (!it || typeof it !== 'object') return null
-        const text = it.text || ''
-        const annotations = it.annotations && typeof it.annotations === 'object' ? it.annotations : {}
-        return text ? { text, annotations } : null
-      })
-      .filter(Boolean)
-  }
-
-  // Legacy object: { text, romanisation, ipa, ... }
-  if (rawVal && typeof rawVal === 'object') {
-    const { text = '', annotations = null, ...rest } = rawVal
-    const merged = {
-      ...(annotations && typeof annotations === 'object' ? annotations : {}),
-      ...rest,
-      ...annotationMap,
-    }
-
-    if (isExample) {
-      const lines = splitMulti(text)
-      const annoByKey = {}
-      Object.entries(merged).forEach(([k, v]) => { annoByKey[k] = splitMulti(v) })
-      return lines.map((line, i) => {
-        const anns = {}
-        Object.entries(annoByKey).forEach(([k, arr]) => { if (arr[i]) anns[k] = arr[i] })
-        return { text: line, annotations: anns }
-      })
-    }
-    return text ? [{ text, annotations: merged }] : []
-  }
-
-  // Plain string + optional annotation side-channels
-  const text = String(rawVal || '')
-  if (!text) return []
-  if (isExample) {
-    const lines = splitMulti(text)
-    const annoByKey = {}
-    Object.entries(annotationMap).forEach(([k, v]) => { annoByKey[k] = splitMulti(v) })
-    return lines.map((line, i) => {
-      const anns = {}
-      Object.entries(annoByKey).forEach(([k, arr]) => { if (arr[i]) anns[k] = arr[i] })
-      return { text: line, annotations: anns }
-    })
-  }
-  return [{ text, annotations: annotationMap }]
-}
-
-function normaliseGeneratedCards(parsedCards, blueprint) {
-  return parsedCards.map(card => {
-    const next = { ...card, word: stripSenseHint(card.word) }
-
-    blueprint.forEach(f => {
-      const annotationKeys = getPhoneticKeys(f.phonetics)
-      const needsStructured = annotationKeys.length > 0 || f.field_type === 'example'
-      if (!needsStructured) return
-
-      const annotationMap = {}
-      annotationKeys.forEach(k => {
-        const flatKey = `${f.key}_${k}`
-        if (next[flatKey] != null && next[flatKey] !== '') {
-          annotationMap[k] = next[flatKey]
-        }
-        delete next[flatKey]
-      })
-
-      next[f.key] = normaliseAnnotatedValue(next[f.key], annotationMap, f.field_type === 'example')
-    })
-
-    return next
-  })
-}
-
 function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
+  function getPhoneticKeys(ph) {
+    if (!ph) return []
+    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+    const keys = []
+    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+    return keys
+  }
 
-  // Human-readable descriptions for each annotation type
   const ANNOTATION_DESCRIPTIONS = {
     furigana:              'hiragana/katakana above each kanji, as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"',
     romaji:                'Hepburn romanisation',
@@ -131,8 +46,6 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
     english:               'concise English gloss or translation',
   }
 
-  // Fields with annotations are stored as arrays of entries:
-  // [{ "text": "...", "annotations": { "<annotationType>": "..." } }]
   const fieldLines = blueprint.map(f => {
     const annotationKeys = getPhoneticKeys(f.phonetics)
     const hasAnnotations = annotationKeys.length > 0
@@ -150,34 +63,33 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
       return `  - "${f.key}": string — ${f.description || f.label}`
     }
 
-    // Fields with annotations or example type become entry arrays
+    // Fields with annotations or example type become objects: { text, annotationType? }
     const objectLines = []
     if (isExample) {
-      objectLines.push(`    [{ "text": one example sentence with ONLY the target word wrapped in {{word}}, "annotations": { ... } }, ...]`)
-      objectLines.push(`    Provide 3 entries in the array, one sentence per entry.`)
+      objectLines.push(`    "text": 3 varied sentences separated by " ;;; ", wrapping ONLY the target word with {{word}}. Example: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
       annotationKeys.forEach(ak => {
         if (ANNOTATION_DESCRIPTIONS[ak]) {
-          objectLines.push(`    annotations."${ak}": ${ANNOTATION_DESCRIPTIONS[ak]} for the SAME sentence.`)
+          objectLines.push(`    "${ak}": same 3 sentences in the same order but with ${ANNOTATION_DESCRIPTIONS[ak]} instead of the target script. Also wrap the equivalent word with {{word}}.`)
         }
       })
     } else {
-      objectLines.push(`    [{ "text": ${f.description || f.label}, "annotations": { ... } }]`)
+      objectLines.push(`    "text": ${f.description || f.label}`)
       annotationKeys.forEach(ak => {
         if (ANNOTATION_DESCRIPTIONS[ak]) {
-          objectLines.push(`    annotations."${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`)
+          objectLines.push(`    "${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`)
         }
       })
     }
 
-    return `  - "${f.key}": array of objects —\n${objectLines.join('\n')}`
+    return `  - "${f.key}": object —\n${objectLines.join('\n')}`
   }).join('\n')
 
-  // Build expected output keys list for the prompt footer
   const exampleKeys = ['word', '_meanings', '_sense']
   blueprint.forEach(f => {
     const annotationKeys = getPhoneticKeys(f.phonetics)
     if (annotationKeys.length > 0 || f.field_type === 'example') {
-      exampleKeys.push(`${f.key}: [{ text, annotations: {${annotationKeys.join(', ')}} }]`)
+      const subKeys = ['text', ...annotationKeys].map(k => `"${k}"`).join(', ')
+      exampleKeys.push(`${f.key}: {${subKeys}}`)
     } else {
       exampleKeys.push(f.key)
     }
@@ -214,9 +126,7 @@ Rules:
 - Process EVERY word — output array must have at least as many objects as the input list.
 - "word" must match the input word EXACTLY.
 - "context" must be written in ${contextLanguage === 'source' ? sourceLanguage : targetLanguage}. Keep it very brief (2–5 words). Leave "" only if the word is completely unambiguous.
-- For structured fields: return an ARRAY of objects with keys "text" and "annotations".
-- Annotation values must be nested under "annotations" only.
-- NEVER output sibling keys like "example_romanisation" or "${blueprint[0]?.key || 'field'}_english".
+- For fields that are objects: always include "text". Include annotation keys only if specified above.
 - Plain string fields (source_translation, context, and fields with no annotations) stay as strings — do NOT wrap them in objects.
 
 Expected output shape per item: ${exampleKeys.join(', ')}
@@ -245,7 +155,7 @@ export const handler = async (event) => {
     const MAX_ATTEMPTS = 5
     const BASE_DELAY_MS = 1500
     let lastError = null
-    let parseFailures = 0  // Track parse failures to escalate prompt strictness
+    let parseFailures = 0
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       if (attempt > 0) {
@@ -254,10 +164,8 @@ export const handler = async (event) => {
         await new Promise(r => setTimeout(r, delay))
       }
 
-      // Lower temperature on every attempt — start strict, get stricter on parse failures
       const temperature = attempt === 0 ? 0.1 : Math.max(0, 0.08 - attempt * 0.02)
 
-      // On parse failures, rebuild prompt with extra JSON strictness instruction
       const prompt = parseFailures > 0
         ? buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
             + '\n\nCRITICAL: Your previous response failed JSON parsing. Output ONLY the raw JSON array. Absolutely no text before or after the array. No markdown. No explanation. Start your response with [ and end with ].'
@@ -270,11 +178,7 @@ export const handler = async (event) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature,
-              maxOutputTokens: 8192,
-              responseMimeType: 'application/json',
-            },
+            generationConfig: { temperature, maxOutputTokens: 8192, responseMimeType: 'application/json' },
           }),
         })
       } catch (fetchErr) {
@@ -311,8 +215,7 @@ export const handler = async (event) => {
           parseFailures++
           continue
         }
-        // Normalise structured field values into a single canonical shape
-        const cards = normaliseGeneratedCards(parsed, blueprint)
+        const cards = parsed.map(c => ({ ...c, word: stripSenseHint(c.word) }))
         return json({ cards })
       } catch (parseErr) {
         lastError = `JSON parse: ${parseErr.message} (output: ${text.slice(0, 200)})`

@@ -30,18 +30,7 @@ export const handler = async (event) => {
     for (const { id, word, fields } of patches) {
       if (!fields || !Object.keys(fields).length) continue
 
-      // Build a per-field merge expression.
-      // - Plain string values: use top-level || merge (simple replacement)
-      // - Object values: deep-merge using jsonb_set so existing annotation keys survive
-      //
-      // We do this in a single UPDATE per card using a chain of jsonb_set calls.
-      // For simplicity we build one statement that does:
-      //   fields = (fields || topLevelMerge) deep-merged with objectFields
-      //
-      // Strategy: separate fields into plain strings vs objects, then:
-      // 1. Apply all string fields with ||
-      // 2. For each object field, jsonb_set(result, '{fieldKey}', existing || incoming)
-
+      // Separate plain string fields from object fields
       const stringFields = {}
       const objectFields = {}
       for (const [k, v] of Object.entries(fields)) {
@@ -55,7 +44,6 @@ export const handler = async (event) => {
       if (id) {
         await deepMergeById(id, userId, stringFields, objectFields)
       } else if (word) {
-        // Get all matching card ids then patch each by id
         const { rows: matching } = await query(
           'SELECT id FROM cards WHERE deck_id=$1 AND user_id=$2 AND word=$3',
           [deckId, userId, word]
@@ -79,12 +67,13 @@ export const handler = async (event) => {
 
 async function deepMergeById(id, userId, stringFields, objectFields) {
   // Step 1: merge all plain-string fields at the top level
-  let sql = `UPDATE cards SET fields = fields || $1::jsonb, updated_at = NOW() WHERE id = $2 AND user_id = $3`
-  const args = [JSON.stringify(stringFields), id, userId]
-  await query(sql, args)
+  await query(
+    `UPDATE cards SET fields = fields || $1::jsonb, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
+    [JSON.stringify(stringFields), id, userId]
+  )
 
-  // Step 2: for each object field, deep-merge the incoming object into the stored one
-  // jsonb_set(fields, '{key}', COALESCE(fields->'{key}', '{}') || incomingObj)
+  // Step 2: for each object field, deep-merge into the stored object
+  // jsonb_set(fields, '{key}', COALESCE(fields->key, '{}') || incoming)
   for (const [k, v] of Object.entries(objectFields)) {
     await query(
       `UPDATE cards

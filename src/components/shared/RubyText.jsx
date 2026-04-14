@@ -3,20 +3,11 @@ import { fontForText } from '../../lib/utils'
 /**
  * RubyText — renders a field value with phonetic annotations.
  *
- * Field values can be:
- *   - string
- *   - object: { text, furigana, english, ... }
- *   - array:  [{ text, annotations: { furigana, english, ... } }, ...]
+ * Field values are now objects:  { text: "...", furigana: "...", english: "..." }
  * Old flat string values are handled transparently for backward compat.
- *
- * `fieldValue` is the raw value from card.fields[fieldKey]:
- *   - New shape: [{ text, annotations: { ... } }, ...]
- *   - Legacy shape: { text, [annotationType]: value, ... }
- *   - Old shape: "plain string"  (no annotations — compat)
  */
 export default function RubyText({ fieldValue, phonetics, className = '', style = {} }) {
   const { text, annotations } = resolveField(fieldValue)
-
   if (!text) return null
 
   const ph = normalise(phonetics)
@@ -26,9 +17,7 @@ export default function RubyText({ fieldValue, phonetics, className = '', style 
   }
 
   const rubyAnnotation = ph.ruby !== 'none' ? annotations[ph.ruby] : null
-  const extras = ph.extras
-    .map(k => ({ key: k, value: annotations[k] }))
-    .filter(e => e.value)
+  const extras = ph.extras.map(k => ({ key: k, value: annotations[k] })).filter(e => e.value)
 
   return (
     <span className={className} style={style}>
@@ -38,15 +27,11 @@ export default function RubyText({ fieldValue, phonetics, className = '', style 
           : <SimpleRuby base={text} annotation={rubyAnnotation} />
         : <span style={{ fontFamily: fontForText(text) }}>{text}</span>
       }
-
-      {/* Inline extras (ipa, diacritics, transliterations) */}
       {extras.filter(e => e.key !== 'english').map(e => (
         <span key={e.key} className="ml-1" style={{ fontSize: '0.82em', color: 'var(--text-secondary)', fontFamily: e.key === 'ipa' ? 'monospace' : fontForText(e.value) }}>
           {e.key === 'ipa' ? `/${e.value}/` : `(${e.value})`}
         </span>
       ))}
-
-      {/* English gloss below */}
       {extras.filter(e => e.key === 'english').map(e => (
         <span key="english" className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
           {e.value}
@@ -64,14 +49,6 @@ export default function RubyText({ fieldValue, phonetics, className = '', style 
 export function resolveField(fieldValue) {
   if (!fieldValue) return { text: '', annotations: {} }
   if (typeof fieldValue === 'string') return { text: fieldValue, annotations: {} }
-  if (Array.isArray(fieldValue)) {
-    const first = fieldValue.find(v => v && typeof v === 'object') || {}
-    const text = first.text || ''
-    const annotations = first.annotations && typeof first.annotations === 'object'
-      ? first.annotations
-      : {}
-    return { text, annotations }
-  }
   if (typeof fieldValue === 'object') {
     const { text = '', ...annotations } = fieldValue
     return { text, annotations }
@@ -79,9 +56,7 @@ export function resolveField(fieldValue) {
   return { text: String(fieldValue), annotations: {} }
 }
 
-/**
- * Get just the plain text from a field value — for search, cloze, display without annotations.
- */
+/** Get just the plain text from a field value — for search, cloze, etc. */
 export function fieldText(fieldValue) {
   return resolveField(fieldValue).text
 }
@@ -102,9 +77,7 @@ function SimpleRuby({ base, annotation }) {
     <ruby style={{ fontFamily: fontForText(base), rubyAlign: 'center' }}>
       {base}
       <rp>(</rp>
-      <rt style={{ fontSize: '0.6em', color: 'var(--text-secondary)', fontFamily: fontForText(annotation) }}>
-        {annotation}
-      </rt>
+      <rt style={{ fontSize: '0.6em', color: 'var(--text-secondary)', fontFamily: fontForText(annotation) }}>{annotation}</rt>
       <rp>)</rp>
     </ruby>
   )
@@ -133,6 +106,5 @@ function FuriganaRuby({ base, furigana }) {
       )
     }
   }
-
   return <SimpleRuby base={base} annotation={furigana} />
 }
