@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -6,6 +6,7 @@ import { useAppStore } from '../store/appStore'
 import { getNextIntervalLabel } from '../lib/fsrs'
 import { fuzzyMatch, parseCloze, pickRandomExample } from '../lib/fuzzy'
 import { shuffle, fontForText } from '../lib/utils'
+import { extractDiacriticsFromCards, applyDiacritic, insertCharAtCursor } from '../lib/diacritics'
 import { useStudyKeyboard } from '../hooks/useKeyboard'
 import { DeckStatsBar } from '../components/shared/StatsBar'
 import { useDeckStats } from '../hooks/useDeckStats'
@@ -163,7 +164,15 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
   const flipTimerRef = useRef(null)
   const typingInputRef = useRef(null)
   const clozeInputRef = useRef(null)
-  const accentChars = useMemo(()=>extractAccentChars(allCards),[allCards])
+  // Extract diacritics and special chars from all card words/fields
+  const { marks: diacriticMarks, specials: specialChars } = useMemo(
+    () => extractDiacriticsFromCards(allCards),
+    [allCards]
+  )
+  const latinTyping = deck?.latin_typing === true
+  const romanisationField = deck?.romanisation_field || ''
+  const showDiacriticBar = (config.direction === 'sourceToTarget' || latinTyping) &&
+    (diacriticMarks.length > 0 || specialChars.length > 0)
 
   const reviewMutation = useMutation({
     mutationFn: ({cardId,rating})=>api.recordReview(cardId,rating),
@@ -326,10 +335,21 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
           {config.interaction==='typing'&&(
             <div className="card p-5">
               <div className="flex items-center justify-between mb-2">
-                <div className="section-title">Type the {config.direction==='targetToSource'?(deck?.source_language||'English'):deck?.target_language} answer</div>
+                <div className="section-title">
+                  {latinTyping && romanisationField
+                    ? `Type in Latin script (${romanisationField})`
+                    : `Type the ${config.direction==='targetToSource'?(deck?.source_language||'English'):deck?.target_language} answer`}
+                </div>
+                {latinTyping && romanisationField && (
+                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background:'var(--accent-glow)',color:'var(--accent-primary)' }}>
+                    Romanisation mode
+                  </span>
+                )}
               </div>
               <input ref={typingInputRef} className="input text-base" value={typingAnswer} onChange={e=>setTypingAnswer(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submitTyping()} placeholder="Your answer..." data-accent-input="1"/>
-              {accentChars.length>0&&config.direction==='sourceToTarget'&&<AccentBar chars={accentChars} onInsert={ch=>{const input=typingInputRef.current;if(!input){setTypingAnswer(prev=>prev+ch);return};const start=input.selectionStart??input.value.length,end=input.selectionEnd??input.value.length,next=input.value.slice(0,start)+ch+input.value.slice(end);setTypingAnswer(next);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(start+ch.length,start+ch.length)})}}/>}
+              {showDiacriticBar&&<DiacriticBar marks={diacriticMarks} specials={specialChars}
+                onInsert={ch=>{const input=typingInputRef.current;if(!input){setTypingAnswer(prev=>prev+ch);return};const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=insertCharAtCursor(input.value,pos,ch);setTypingAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}
+                onApplyDiacritic={(combining,group)=>{const input=typingInputRef.current;if(!input)return;const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=applyDiacritic(input.value,pos,combining,group);setTypingAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}/>}
               <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
             </div>
           )}
@@ -365,7 +385,9 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
                     value={clozeAnswer} onChange={e=>setClozeAnswer(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submitCloze()} data-accent-input="1"/>
                   {clozeData.after}
                 </div>
-                {accentChars.length>0&&config.direction==='sourceToTarget'&&<AccentBar chars={accentChars} onInsert={ch=>{const input=clozeInputRef.current;if(!input){setClozeAnswer(prev=>prev+ch);return};const start=input.selectionStart??input.value.length,end=input.selectionEnd??input.value.length,next=input.value.slice(0,start)+ch+input.value.slice(end);setClozeAnswer(next);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(start+ch.length,start+ch.length)})}}/>}
+                {showDiacriticBar&&<DiacriticBar marks={diacriticMarks} specials={specialChars}
+                onInsert={ch=>{const input=clozeInputRef.current;if(!input){setClozeAnswer(prev=>prev+ch);return};const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=insertCharAtCursor(input.value,pos,ch);setClozeAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}
+                onApplyDiacritic={(combining,group)=>{const input=clozeInputRef.current;if(!input)return;const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=applyDiacritic(input.value,pos,combining,group);setClozeAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}/>}
                 <button className="btn-primary mt-3 w-full" onClick={submitCloze}>Check</button>
               </div>
             ):(
@@ -451,6 +473,12 @@ function getAnswer(card, direction, blueprint, deck) {
     const srcField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')||blueprint[0]
     const raw=srcField?card.fields?.[srcField.key]:null
     return raw&&typeof raw==='object'?raw.text:(raw||card.word)
+  }
+  // sourceToTarget: if latin_typing mode, return the romanisation field text
+  if (deck?.latin_typing && deck?.romanisation_field) {
+    const romVal = card.fields?.[deck.romanisation_field]
+    const romText = romVal && typeof romVal === 'object' ? romVal.text : romVal
+    if (romText) return romText
   }
   return card.word
 }
@@ -563,52 +591,93 @@ function SessionComplete({ stats, total, mode, onEnd }) {
   )
 }
 
-function isLatinExtended(ch) {
-  const cp=ch.codePointAt(0)
-  if(cp>=0xC0&&cp<=0xFF&&cp!==0xD7&&cp!==0xF7)return true
-  if(cp>=0x0100&&cp<=0x017F)return true
-  if(cp>=0x0180&&cp<=0x024F)return true
-  return false
-}
+/**
+ * DiacriticBar — keyboard-driven diacritic composer.
+ *
+ * Number keys 1–9, 0 trigger diacritics (compose onto prev char).
+ * Shift+1–9,0 insert special standalone characters.
+ * Clicking a diacritic button composes; clicking a special char inserts it directly.
+ */
+const DIACRITIC_KEYS = ['1','2','3','4','5','6','7','8','9','0']
 
-function extractAccentChars(cards) {
-  if (!cards?.length) return []
-  const freq={}
-  for (const card of cards) {
-    const text=card.word
-    if (!text||typeof text!=='string') continue
-    for (const ch of text) { if(isLatinExtended(ch)){const lower=ch.toLowerCase();freq[lower]=(freq[lower]||0)+1} }
-  }
-  return Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([ch])=>ch)
-}
-
-const ACCENT_KEYS=['1','2','3','4','5','6','7','8','9','0']
-
-function AccentBar({ chars, onInsert }) {
+function DiacriticBar({ marks, specials, onInsert, onApplyDiacritic }) {
   useEffect(()=>{
-    if (!chars.length) return
+    if (!marks.length && !specials.length) return
     const handler=(e)=>{
-      if (!['INPUT','TEXTAREA'].includes(e.target.tagName)) return
-      const idx=ACCENT_KEYS.indexOf(e.key)
-      if (idx===-1||idx>=chars.length) return
-      if (!e.target.dataset.accentInput) return
-      e.preventDefault(); onInsert(chars[idx])
+      const target=e.target
+      if (!['INPUT','TEXTAREA'].includes(target.tagName)) return
+      if (!target.dataset.accentInput) return
+
+      // Number keys 1–0 → apply diacritic mark (compose onto char before cursor)
+      if (!e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const idx = DIACRITIC_KEYS.indexOf(e.key)
+        if (idx !== -1 && idx < marks.length) {
+          e.preventDefault()
+          onApplyDiacritic(marks[idx].combining, marks[idx].group)
+          return
+        }
+      }
+
+      // Shift+number → insert special character
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Shift+1 = '!', but we map by key code position
+        const shiftMap = {'!':'1','@':'2','#':'3','$':'4','%':'5','^':'6','&':'7','*':'8','(':'9',')':'0'}
+        const digit = shiftMap[e.key]
+        if (digit) {
+          const idx = DIACRITIC_KEYS.indexOf(digit)
+          if (idx !== -1 && idx < specials.length) {
+            e.preventDefault()
+            onInsert(specials[idx])
+          }
+        }
+      }
     }
-    window.addEventListener('keydown',handler)
-    return ()=>window.removeEventListener('keydown',handler)
-  },[chars,onInsert])
-  if (!chars.length) return null
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [marks, specials, onInsert, onApplyDiacritic])
+
+  if (!marks.length && !specials.length) return null
+
   return (
-    <div className="flex gap-1 flex-wrap mt-2 justify-center">
-      {chars.map((ch,i)=>(
-        <button key={ch} type="button" tabIndex={-1} onClick={()=>onInsert(ch)}
-          className="flex flex-col items-center justify-center rounded-lg border transition-all"
-          style={{ width:'36px',height:'36px',borderColor:'var(--border)',background:'var(--bg-surface)',color:'var(--text-primary)',fontSize:'14px',position:'relative' }}
-          title={`Insert "${ch}" (press ${ACCENT_KEYS[i]})`}>
-          {ch}
-          <span style={{ position:'absolute',bottom:'1px',right:'3px',fontSize:'8px',color:'var(--text-muted)',lineHeight:1 }}>{ACCENT_KEYS[i]}</span>
-        </button>
-      ))}
+    <div className="mt-2 space-y-1">
+      {/* Diacritic marks row */}
+      {marks.length > 0 && (
+        <div className="flex gap-1 flex-wrap justify-center">
+          {marks.map((mark, i) => (
+            <button key={mark.key} type="button" tabIndex={-1}
+              onClick={() => onApplyDiacritic(mark.combining, mark.group)}
+              className="flex flex-col items-center justify-center rounded-lg border transition-all hover:border-purple-400"
+              style={{ minWidth:'32px', height:'32px', padding:'0 6px', borderColor:'var(--border)', background:'var(--bg-surface)', color:'var(--text-primary)', fontSize:'15px', position:'relative', fontFamily:'serif' }}
+              title={`${mark.hint} — press ${DIACRITIC_KEYS[i] ?? '?'}`}>
+              {mark.label}
+              {i < DIACRITIC_KEYS.length && (
+                <span style={{ position:'absolute', bottom:'1px', right:'3px', fontSize:'7px', color:'var(--text-muted)', lineHeight:1 }}>
+                  {DIACRITIC_KEYS[i]}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* Special standalone chars row */}
+      {specials.length > 0 && (
+        <div className="flex gap-1 flex-wrap justify-center">
+          {specials.map((ch, i) => (
+            <button key={ch} type="button" tabIndex={-1}
+              onClick={() => onInsert(ch)}
+              className="flex flex-col items-center justify-center rounded-lg border transition-all hover:border-purple-400"
+              style={{ minWidth:'32px', height:'32px', padding:'0 6px', borderColor:'rgba(124,106,240,.3)', background:'var(--accent-glow)', color:'var(--accent-primary)', fontSize:'14px', position:'relative', fontFamily:'serif' }}
+              title={`Insert ${ch}${i < specials.length ? ` — Shift+${DIACRITIC_KEYS[i] ?? '?'}` : ''}`}>
+              {ch}
+              {i < DIACRITIC_KEYS.length && (
+                <span style={{ position:'absolute', bottom:'1px', right:'3px', fontSize:'7px', color:'var(--accent-primary)', opacity:0.6, lineHeight:1 }}>
+                  ⇧{DIACRITIC_KEYS[i]}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

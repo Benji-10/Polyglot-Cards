@@ -20,7 +20,7 @@ export default function AppShell() {
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
       <aside
-        className={\`fixed inset-y-0 left-0 z-40 flex flex-col flex-shrink-0 transition-transform duration-300 lg:translate-x-0 lg:static lg:flex \${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}\`}
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col flex-shrink-0 transition-transform duration-300 lg:translate-x-0 lg:static lg:flex \${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         style={{ width: '220px', background: 'var(--bg-surface)', borderRight: '1px solid var(--border)' }}
       >
         <div className="flex-shrink-0 flex items-center gap-2.5 px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
@@ -65,7 +65,7 @@ export default function AppShell() {
                 { label:'Collection',icon:'📚',path:`/deck/${activeDeckId}/collection` },
               ].map(item => (
                 <NavLink key={item.label} to={item.path} onClick={closeSidebar}
-                  className={({ isActive }) => \`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}\`}
+                  className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}`}
                   style={({ isActive }) => ({ background:isActive?'var(--accent-glow)':'transparent', color:isActive?'var(--accent-primary)':'var(--text-secondary)' })}>
                   <span style={{ fontSize:'14px' }}>{item.icon}</span>
                   <span>{item.label}</span>
@@ -79,12 +79,12 @@ export default function AppShell() {
           <div className="px-3 mt-auto pt-4 pb-2 space-y-0.5">
             <div className="section-title px-2 mb-2">App</div>
             <NavLink to="/" onClick={closeSidebar} end
-              className={({ isActive }) => \`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}\`}
+              className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}`}
               style={({ isActive }) => ({ background:isActive?'var(--accent-glow)':'transparent', color:isActive?'var(--accent-primary)':'var(--text-secondary)' })}>
               <span style={{ fontSize:'14px' }}>◈</span> All Decks
             </NavLink>
             <NavLink to="/settings" onClick={closeSidebar}
-              className={({ isActive }) => \`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}\`}
+              className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all \${isActive?'font-medium':''}`}
               style={({ isActive }) => ({ background:isActive?'var(--accent-glow)':'transparent', color:isActive?'var(--accent-primary)':'var(--text-secondary)' })}>
               <span style={{ fontSize:'14px' }}>⚙</span> Settings
             </NavLink>

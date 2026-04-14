@@ -115,8 +115,8 @@ function EmptyState({ onCreate }) {
 
 function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
   const [form, setForm] = useState(deck
-    ? { name:deck.name, target_language:deck.target_language, source_language:deck.source_language||defaultSource||'English', description:deck.description||'', context_language:deck.context_language||'target', strict_accents:deck.strict_accents!==false, strict_mode:deck.strict_mode===true }
-    : { name:'', target_language:'', source_language:defaultSource||'English', description:'', context_language:'target', strict_accents:true, strict_mode:false }
+    ? { name:deck.name, target_language:deck.target_language, source_language:deck.source_language||defaultSource||'English', description:deck.description||'', context_language:deck.context_language||'target', strict_accents:deck.strict_accents!==false, strict_mode:deck.strict_mode===true, latin_typing:deck.latin_typing===true, romanisation_field:deck.romanisation_field||'' }
+    : { name:'', target_language:'', source_language:defaultSource||'English', description:'', context_language:'target', strict_accents:true, strict_mode:false, latin_typing:false, romanisation_field:'' }
   )
   const isEdit = !!deck
   const targetFlag = getLanguageFlag(form.target_language)
@@ -177,6 +177,23 @@ function DeckFormModal({ deck, defaultSource, onClose, onSave, saving }) {
                 <ToggleSwitch value={form[key]} onChange={v=>setForm(f=>({...f,[key]:v}))} />
               </label>
             ))}
+            <label className="flex items-center justify-between gap-3 p-3 rounded-xl cursor-pointer" style={{ background:'var(--bg-surface)',border:'1px solid var(--border)' }}>
+              <div>
+                <div className="text-sm font-medium" style={{ color:'var(--text-primary)' }}>Romanisation typing mode</div>
+                <div className="text-xs" style={{ color:'var(--text-muted)' }}>Type in Latin script (romaji, pinyin, Franco…) matched against a romanisation field</div>
+              </div>
+              <ToggleSwitch value={form.latin_typing} onChange={v=>setForm(f=>({...f,latin_typing:v}))} />
+            </label>
+            {form.latin_typing && (
+              <div className="px-3 pb-3 rounded-xl -mt-1" style={{ background:'var(--bg-surface)',border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 12px 12px' }}>
+                <label className="section-title block mb-1.5 pt-3">Romanisation field key</label>
+                <input className="input text-sm" value={form.romanisation_field} onChange={e=>setForm(f=>({...f,romanisation_field:e.target.value}))}
+                  placeholder="e.g. reading, romaji, pinyin, romanisation" />
+                <div className="text-xs mt-1.5" style={{ color:'var(--text-muted)' }}>
+                  The blueprint field key whose value contains the romanised text to match against.
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex gap-3 pt-2">

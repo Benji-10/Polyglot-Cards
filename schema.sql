@@ -90,3 +90,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   settings JSONB NOT NULL DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Romanisation typing mode: allow users to type romanised input matched against a romanisation field
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS latin_typing BOOLEAN DEFAULT false;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS romanisation_field TEXT DEFAULT '';
