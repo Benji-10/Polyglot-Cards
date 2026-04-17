@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Romanisation typing mode: allow users to type romanised input matched against a romanisation field
-ALTER TABLE decks ADD COLUMN IF NOT EXISTS latin_typing BOOLEAN DEFAULT false;
-ALTER TABLE decks ADD COLUMN IF NOT EXISTS romanisation_field TEXT DEFAULT '';
+-- Romanisation is now handled via hidden mandatory card fields (target_romanisation, source_romanisation)
+-- These columns are kept for backwards compatibility but no longer used by the app
+-- ALTER TABLE decks ADD COLUMN IF NOT EXISTS latin_typing BOOLEAN DEFAULT false;
+-- ALTER TABLE decks ADD COLUMN IF NOT EXISTS romanisation_field TEXT DEFAULT '';

@@ -1,9 +1,11 @@
 import { requireUser, json, error, handleCors } from './_db.js'
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
 
 function cleanAndParse(text) {
   let cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
+  const arrStart = cleaned.indexOf('[')
+  if (arrStart > 0) cleaned = cleaned.slice(arrStart)
   if (!cleaned.endsWith(']')) {
     const lastBrace = cleaned.lastIndexOf('}')
     const lastComma = cleaned.lastIndexOf(',')
@@ -20,31 +22,53 @@ function stripSenseHint(word) {
   return m ? m[1].trim() : word.trim()
 }
 
-function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
-  function getPhoneticKeys(ph) {
-    if (!ph) return []
-    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
-    const keys = []
-    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
-    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
-    return keys
-  }
+function getPhoneticKeys(ph) {
+  if (!ph) return []
+  if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+  const keys = []
+  if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+  if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+  return keys
+}
 
+// Returns true if every character in the string is Latin script + diacritics + punctuation/spaces.
+// Used to decide whether to skip saving a romanisation field (word is already Latin-typeable).
+function isAllLatin(str) {
+  if (!str || !str.trim()) return true
+  // Latin Extended: Basic Latin, Latin-1 Supplement (no control chars), Latin Extended A/B
+  // Plus common punctuation. Reject if ANY char is outside these ranges.
+  return /^[\u0000-\u024F\u1E00-\u1EFF\s\p{P}\p{N}]+$/u.test(str)
+}
+
+function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabBatch) {
   const ANNOTATION_DESCRIPTIONS = {
     furigana:              'hiragana/katakana above each kanji, as space-separated "kanji:reading" pairs e.g. "日本語:にほんご"',
-    romaji:                'Hepburn romanisation',
+    romaji:                'Hepburn romanisation in Latin script',
     pinyin:                'Pīnyīn with tone marks',
     bopomofo:              'Zhùyīn Fúhào symbols (ㄅㄆㄇ)',
     jyutping:              'Jyutping romanisation for Cantonese',
-    hangulRomanisation:    'Revised Romanisation of Korean',
+    hangulRomanisation:    'Revised Romanisation of Korean in Latin script',
     cantoneseRomanisation: 'Yale Cantonese romanisation',
     romanisation:          'standard Latin-script transliteration',
     cyrillicTranslit:      'Latin transliteration of Cyrillic',
     tones:                 'tonal representation (numbered or marked)',
     diacritics:            'full vowel-marked version (tashkeel, nikud, etc.)',
     ipa:                   'IPA pronunciation string e.g. /niː.hɑːŋ.ɡoʊ/',
-    english:               'concise English gloss or translation',
+    english:               `concise ${sourceLanguage} gloss (one short phrase)`,
   }
+
+  // Build schema lines for the mandatory romanisation fields
+  const romTargetDesc = `Latin-script pronunciation of the target word in ${targetLanguage}. Use the standard romanisation system for the language (e.g. Hepburn for Japanese, Pinyin for Mandarin, Revised Romanisation for Korean, transliteration for Arabic/Russian). If the word is already entirely Latin script (including diacritics), output "" — it doesn't need romanisation.`
+  const romSourceDesc = `Latin-script pronunciation of the ${sourceLanguage} translation. Use the standard romanisation for ${sourceLanguage}. If ${sourceLanguage} is already entirely Latin script (e.g. English, French, Spanish), output "" — it doesn't need romanisation.`
+
+  // Schema comment block
+  const schemaLines = [
+    '  "word": string,           // exact input word, unchanged',
+    '  "_meanings": number,      // total count of distinct unrelated meanings for this word',
+    '  "_sense": string,         // "" if only one meaning; brief label if homograph e.g. "beverage"',
+    '  "target_romanisation": string, // Latin-script pronunciation of word; "" if word is already Latin',
+    '  "source_romanisation": string, // Latin-script pronunciation of translation; "" if already Latin',
+  ]
 
   const fieldLines = blueprint.map(f => {
     const annotationKeys = getPhoneticKeys(f.phonetics)
@@ -52,86 +76,125 @@ function buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint,
     const isExample = f.field_type === 'example'
 
     if (f.key === 'source_translation') {
-      return `  - "${f.key}": string — ONE clean word in ${sourceLanguage}. No slashes, no alternatives. Match the specific meaning.`
+      if (hasAnnotations) {
+        const parts = [`  "${f.key}": object — { "text": ONE clean ${sourceLanguage} word/phrase, no slashes`]
+        annotationKeys.forEach(ak => {
+          if (ANNOTATION_DESCRIPTIONS[ak]) parts.push(`, "${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`)
+        })
+        schemaLines.push(`  "${f.key}": {text, ${annotationKeys.join(', ')}},`)
+        return parts.join('') + ' }'
+      }
+      schemaLines.push(`  "${f.key}": string,`)
+      return `  "${f.key}": string — ONE clean ${sourceLanguage} word/phrase. No slashes. Match the specific meaning.`
     }
+
     if (f.key === 'context') {
       const ctxLang = contextLanguage === 'source' ? sourceLanguage : targetLanguage
-      return `  - "${f.key}": string — Write in ${ctxLang}. Very brief (2-5 words), disambiguates this meaning. Leave "" if unambiguous.`
+      if (hasAnnotations) {
+        schemaLines.push(`  "${f.key}": {text, ${annotationKeys.join(', ')}},`)
+        return `  "${f.key}": object — { "text": ONLY for homographs: brief ${ctxLang} hint (2-4 words). "" for non-homographs, ${annotationKeys.map(ak => `"${ak}": ${ANNOTATION_DESCRIPTIONS[ak]||ak}`).join(', ')} }`
+      }
+      schemaLines.push(`  "${f.key}": string,`)
+      return `  "${f.key}": string — ONLY for homographs: very brief ${ctxLang} hint (2-4 words) disambiguating THIS meaning. Must be "" for words with only one meaning.`
     }
 
     if (!hasAnnotations && !isExample) {
-      return `  - "${f.key}": string — ${f.description || f.label}`
+      schemaLines.push(`  "${f.key}": string,`)
+      return `  "${f.key}": string — ${f.description || f.label}`
     }
 
-    // Fields with annotations or example type become objects: { text, annotationType? }
-    const objectLines = []
+    const subKeys = ['text', ...annotationKeys].map(k => `"${k}"`).join(', ')
+    schemaLines.push(`  "${f.key}": {${subKeys}},`)
+
     if (isExample) {
-      objectLines.push(`    "text": 3 varied sentences separated by " ;;; ", wrapping ONLY the target word with {{word}}. Example: "She {{loves}} him. ;;; Their {{love}} is eternal. ;;; {{Love}} conquers all."`)
-      annotationKeys.forEach(ak => {
-        if (ANNOTATION_DESCRIPTIONS[ak]) {
-          objectLines.push(`    "${ak}": same 3 sentences in the same order but with ${ANNOTATION_DESCRIPTIONS[ak]} instead of the target script. Also wrap the equivalent word with {{word}}.`)
-        }
-      })
-    } else {
-      objectLines.push(`    "text": ${f.description || f.label}`)
-      annotationKeys.forEach(ak => {
-        if (ANNOTATION_DESCRIPTIONS[ak]) {
-          objectLines.push(`    "${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`)
-        }
-      })
+      return [
+        `  "${f.key}": object —`,
+        `    "text": exactly 3 varied sentences separated by " ;;; ", wrapping ONLY the target word with {{word}}`,
+        ...annotationKeys.filter(ak => ANNOTATION_DESCRIPTIONS[ak]).map(ak =>
+          `    "${ak}": the SAME 3 sentences in same order but in ${ANNOTATION_DESCRIPTIONS[ak]}; also wrap the equivalent with {{word}}`
+        ),
+      ].join('\n')
     }
 
-    return `  - "${f.key}": object —\n${objectLines.join('\n')}`
+    return [
+      `  "${f.key}": object —`,
+      `    "text": ${f.description || f.label}`,
+      ...annotationKeys.filter(ak => ANNOTATION_DESCRIPTIONS[ak]).map(ak => `    "${ak}": ${ANNOTATION_DESCRIPTIONS[ak]}`),
+    ].join('\n')
   }).join('\n')
-
-  const exampleKeys = ['word', '_meanings', '_sense']
-  blueprint.forEach(f => {
-    const annotationKeys = getPhoneticKeys(f.phonetics)
-    if (annotationKeys.length > 0 || f.field_type === 'example') {
-      const subKeys = ['text', ...annotationKeys].map(k => `"${k}"`).join(', ')
-      exampleKeys.push(`${f.key}: {${subKeys}}`)
-    } else {
-      exampleKeys.push(f.key)
-    }
-  })
 
   const cleanVocab = vocabBatch.map(v => stripSenseHint(v))
 
-  return `You are a language learning assistant generating flashcard data.
+  return `You are a language-learning flashcard generator. Respond with ONLY a JSON array — no markdown, no prose, no code fences. Start with [ and end with ].
 
 Target language: ${targetLanguage}
 Source language: ${sourceLanguage}
 
-HOMOGRAPH RULE — CRITICAL:
-A homograph is a word with multiple distinct, unrelated meanings. Examples:
-- French "café" → "coffee" (beverage) AND "café" (establishment) AND "brown" (colour) → 3 separate objects
-- English "bank" → "financial institution" AND "river bank" → 2 separate objects
+=== OUTPUT SCHEMA (one object per word, or one per distinct meaning for homographs) ===
+[
+{
+${schemaLines.join('\n')}
+},
+...
+]
 
-Rules for homographs:
-- Consider ALL common everyday meanings across ALL semantic domains.
-- Output ONE separate JSON object per distinct meaning. Never combine meanings.
-- Each object must have "_meanings": <total count of distinct meanings> and "_sense": "<very brief source-language label, e.g. 'beverage', 'colour', 'place'>".
-- CRITICAL: Every field in a given object must match ONLY that object's "_sense". Never mix data from different meanings across objects.
-- If a word has only one meaning, set "_meanings": 1 and "_sense": "".
+=== HOMOGRAPH RULE ===
+A homograph has multiple DISTINCT, UNRELATED meanings (not just register/nuance differences).
+Examples: French "café" (beverage / establishment / colour), English "bank" (financial / river).
+- N distinct meanings → N separate objects, each "_meanings": N, "_sense": "<brief label>"
+- Single meaning → "_meanings": 1, "_sense": ""
+- Every field in each object must be consistent with ONLY that object's meaning
 
-For each vocabulary item (or each meaning if a homograph), generate a JSON object with:
-  - "word": the vocabulary item EXACTLY as given — no extra text, no parentheses
-  - "_meanings": integer
-  - "_sense": string (empty if only one meaning)
+=== ROMANISATION FIELDS ===
+"target_romanisation": ${romTargetDesc}
+"source_romanisation": ${romSourceDesc}
+
+=== BLUEPRINT FIELD INSTRUCTIONS ===
 ${fieldLines}
 
-Rules:
-- Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
-- CRITICAL: Fill EVERY field. Do NOT leave any field empty or as "". Use a best approximation if uncertain.
-- Process EVERY word — output array must have at least as many objects as the input list.
-- "word" must match the input word EXACTLY.
-- "context" must be written in ${contextLanguage === 'source' ? sourceLanguage : targetLanguage}. Keep it very brief (2–5 words). Leave "" only if the word is completely unambiguous.
-- For fields that are objects: always include "text". Include annotation keys only if specified above.
-- Plain string fields (source_translation, context, and fields with no annotations) stay as strings — do NOT wrap them in objects.
+=== RULES ===
+1. Output ONLY a JSON array. No text before [ or after ].
+2. Fill EVERY field. Never output "" for content fields — use best approximation.
+3. "word" must match input EXACTLY (spelling, case, diacritics).
+4. "context": ONLY set for homographs. Must be "" for all other words.
+5. "target_romanisation" and "source_romanisation": output "" if the text is already Latin script.
+6. For object fields: include "text" and all listed annotation keys only.
+7. Plain string fields stay as strings. Object fields stay as objects.
+8. Process ALL ${cleanVocab.length} words — output ≥ ${cleanVocab.length} objects.
 
-Expected output shape per item: ${exampleKeys.join(', ')}
+=== INPUT ===
+${JSON.stringify(cleanVocab)}`
+}
 
-Now generate for: ${JSON.stringify(cleanVocab)}`
+// Strip context if empty
+function filterEmptyContext(cards) {
+  return cards.map(card => {
+    const ctx = card.context
+    if (ctx === undefined || ctx === null) return card
+    const text = typeof ctx === 'object' ? (ctx.text || '') : String(ctx)
+    if (!text.trim()) {
+      const { context, ...rest } = card
+      return rest
+    }
+    return card
+  })
+}
+
+// Strip romanisation fields if the value is entirely Latin+diacritics
+// (the word itself is already typeable without a separate romanisation)
+function filterLatinRomanisation(cards) {
+  return cards.map(card => {
+    const out = { ...card }
+    if (out.target_romanisation !== undefined) {
+      const v = String(out.target_romanisation || '')
+      if (!v.trim() || isAllLatin(v)) delete out.target_romanisation
+    }
+    if (out.source_romanisation !== undefined) {
+      const v = String(out.source_romanisation || '')
+      if (!v.trim() || isAllLatin(v)) delete out.source_romanisation
+    }
+    return out
+  })
 }
 
 export const handler = async (event) => {
@@ -152,24 +215,23 @@ export const handler = async (event) => {
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) return error('Gemini API key not configured', 500)
 
-    const MAX_ATTEMPTS = 5
-    const BASE_DELAY_MS = 1500
+    const MAX_ATTEMPTS = 4
+    const BASE_DELAY_MS = 1000
     let lastError = null
     let parseFailures = 0
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       if (attempt > 0) {
         const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1)
-        console.log(`Gemini retry ${attempt}/${MAX_ATTEMPTS - 1} in ${delay}ms — previous error: ${lastError}`)
         await new Promise(r => setTimeout(r, delay))
       }
 
-      const temperature = attempt === 0 ? 0.1 : Math.max(0, 0.08 - attempt * 0.02)
+      const temperature = attempt === 0 ? 0 : 0.1
 
+      const basePrompt = buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
       const prompt = parseFailures > 0
-        ? buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
-            + '\n\nCRITICAL: Your previous response failed JSON parsing. Output ONLY the raw JSON array. Absolutely no text before or after the array. No markdown. No explanation. Start your response with [ and end with ].'
-        : buildPrompt(targetLanguage, sourceLanguage, contextLanguage, blueprint, vocabArray)
+        ? basePrompt + '\n\nYour previous response was not valid JSON. Output ONLY [ ... ] with no other text.'
+        : basePrompt
 
       let geminiRes
       try {
@@ -191,7 +253,6 @@ export const handler = async (event) => {
         let errBody = ''
         try { errBody = await geminiRes.text() } catch {}
         lastError = `HTTP ${geminiRes.status}: ${errBody.slice(0, 200)}`
-        console.error(`Gemini ${geminiRes.status} (attempt ${attempt + 1}):`, errBody.slice(0, 400))
         if (!retryable) return error(`Gemini error ${geminiRes.status}: ${errBody.slice(0, 200)}`, 502)
         continue
       }
@@ -202,30 +263,28 @@ export const handler = async (event) => {
 
       const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text
       if (!text) {
-        const reason = geminiData.candidates?.[0]?.finishReason || 'unknown'
-        lastError = `Empty response (finishReason: ${reason})`
-        console.error('No text from Gemini:', JSON.stringify(geminiData).slice(0, 300))
+        lastError = `Empty response (finishReason: ${geminiData.candidates?.[0]?.finishReason || 'unknown'})`
         continue
       }
 
       try {
         const parsed = cleanAndParse(text)
         if (!Array.isArray(parsed) || parsed.length === 0) {
-          lastError = 'Output is not a non-empty array'
-          parseFailures++
-          continue
+          lastError = 'Output is not a non-empty array'; parseFailures++; continue
         }
-        const cards = parsed.map(c => ({ ...c, word: stripSenseHint(c.word) }))
+        const cards = filterLatinRomanisation(
+          filterEmptyContext(
+            parsed.map(c => ({ ...c, word: stripSenseHint(c.word) }))
+          )
+        )
         return json({ cards })
       } catch (parseErr) {
         lastError = `JSON parse: ${parseErr.message} (output: ${text.slice(0, 200)})`
         parseFailures++
-        console.error(`Parse failed (attempt ${attempt + 1}):`, text.slice(0, 400))
         continue
       }
     }
 
-    console.error(`All ${MAX_ATTEMPTS} attempts failed. Last: ${lastError}`)
     return error(`Gemini failed after ${MAX_ATTEMPTS} attempts: ${lastError}`, 502)
 
   } catch (e) {

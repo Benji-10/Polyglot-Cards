@@ -25,9 +25,11 @@ function normalise(str, stripAcc) { let s = str.trim().toLowerCase(); if (stripA
 export function fuzzyMatch(input, expected, opts = {}) {
   const { strictAccents = true, strictMode = false } = typeof opts === 'number' ? {} : opts
   if (!input || !expected) return { correct: false, similarity: 0, exact: false }
+  // Always lowercase (case never matters, even in strict mode)
   const a = normalise(input, !strictAccents)
   const b = normalise(expected, !strictAccents)
   if (a === b) return { correct: true, similarity: 1, exact: true }
+  // Strict mode: exact spelling required (after case + optional accent normalisation), no fuzzy
   if (strictMode) return { correct: false, similarity: 0, exact: false }
   const maxLen = Math.max(a.length, b.length)
   if (maxLen === 0) return { correct: true, similarity: 1, exact: true }
@@ -39,6 +41,23 @@ export function fuzzyMatch(input, expected, opts = {}) {
   else if (isCJK(b)) threshold = 0.9
   else threshold = typeof opts === 'number' ? opts : 0.85
   return { correct: similarity >= threshold, similarity, exact: false }
+}
+
+/**
+ * fuzzyMatchAny — like fuzzyMatch but tries multiple expected values.
+ * Returns the best match (highest similarity) across all candidates.
+ * Used when both the romanised form AND the native script are valid answers.
+ */
+export function fuzzyMatchAny(input, candidates, opts = {}) {
+  if (!input || !candidates || candidates.length === 0) return { correct: false, similarity: 0, exact: false }
+  let best = { correct: false, similarity: 0, exact: false }
+  for (const expected of candidates) {
+    if (!expected) continue
+    const result = fuzzyMatch(input, expected, opts)
+    if (result.correct && !best.correct) best = result
+    else if (result.similarity > best.similarity) best = result
+  }
+  return best
 }
 
 export function parseCloze(text, marker = '{{', endMarker = '}}') {

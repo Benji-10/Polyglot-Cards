@@ -274,9 +274,29 @@ function EditCardModal({ card, blueprint, onClose, onSave, saving }) {
             </div>
           )
         })}
+        {/* Romanisation fields — always editable, not part of blueprint */}
+        <div className="pt-1" style={{ borderTop:'1px solid var(--border)' }}>
+          <div className="section-title mb-2">Romanisation <span className="normal-case font-normal" style={{ color:'var(--text-muted)' }}>(optional — blank if word is already Latin script)</span></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="section-title block mb-1">Target pronunciation</label>
+              <input className="input text-sm" value={fields.target_romanisation||''} onChange={e=>setFields(f=>({...f,target_romanisation:e.target.value||undefined}))} placeholder="e.g. ai shi te ru"/>
+            </div>
+            <div>
+              <label className="section-title block mb-1">Source pronunciation</label>
+              <input className="input text-sm" value={fields.source_romanisation||''} onChange={e=>setFields(f=>({...f,source_romanisation:e.target.value||undefined}))} placeholder="e.g. only if source is non-Latin"/>
+            </div>
+          </div>
+        </div>
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button className="btn-primary flex-1" disabled={saving} onClick={()=>onSave({word,fields})}>{saving?'Saving…':'Save'}</button>
+          <button className="btn-primary flex-1" disabled={saving} onClick={()=>{
+            // Clean up empty romanisation before saving
+            const cleanFields={...fields}
+            if(!cleanFields.target_romanisation?.trim()) delete cleanFields.target_romanisation
+            if(!cleanFields.source_romanisation?.trim()) delete cleanFields.source_romanisation
+            onSave({word,fields:cleanFields})
+          }}>{saving?'Saving…':'Save'}</button>
         </div>
       </div>
     </Modal>

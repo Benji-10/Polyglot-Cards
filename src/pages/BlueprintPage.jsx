@@ -7,8 +7,34 @@ import { useAppStore } from '../store/appStore'
 import Modal from '../components/shared/Modal'
 import Papa from 'papaparse'
 
-const BATCH_SIZE = 25
-const INITIAL_ESTIMATE_MS = 11800
+// Module-level singleton: persists import progress even when component unmounts
+// (the async generation keeps running; this lets the UI reconnect to it)
+const _importStore = {
+  state: 'idle',      // 'idle' | 'generating' | 'done' | 'error' | 'review'
+  msg: '',
+  pct: 0,
+  error: null,
+  totalImported: 0,
+  listeners: new Set(),
+  set(patch) {
+    Object.assign(this, patch)
+    this.listeners.forEach(fn => fn())
+  },
+}
+
+function useImportStore() {
+  const [, rerender] = useState(0)
+  useEffect(() => {
+    const fn = () => rerender(n => n + 1)
+    _importStore.listeners.add(fn)
+    return () => _importStore.listeners.delete(fn)
+  }, [])
+  return _importStore
+}
+
+const BATCH_SIZE = 40          // import: ~40 words/batch
+const REGEN_BATCH_SIZE = 60    // regen: only changed fields, bigger batches ok
+const INITIAL_ESTIMATE_MS = 14000
 
 const FIELD_TYPE_OPTIONS = [
   { value: 'text', label: 'Text' },
@@ -32,14 +58,19 @@ export const RUBY_OPTIONS = [
 export const EXTRA_OPTIONS = [
   { key: 'diacritics', label: 'Vowel marks / diacritics', hint: 'Tashkeel for Arabic, nikud for Hebrew, etc.' },
   { key: 'ipa', label: 'IPA', hint: 'International Phonetic Alphabet — shown as /…/' },
-  { key: 'english', label: 'English gloss', hint: 'Translation shown below the word' },
+  { key: 'english', label: 'Source-language gloss', hint: 'Short translation shown below the word (in your source language)' },
 ]
 
-export const MANDATORY_FIELD_KEYS = ['source_translation', 'context']
+export const MANDATORY_FIELD_KEYS = ['source_translation', 'context', 'target_romanisation', 'source_romanisation']
+// target_romanisation and source_romanisation are hidden from the blueprint editor
+// but are included in every AI generation, CSV export/import, and manual card form
+export const HIDDEN_MANDATORY_KEYS = ['target_romanisation', 'source_romanisation']
 
 const MANDATORY_DEFAULTS = {
   source_translation: { key:'source_translation', label:'Translation', description:'A single short translation in the source language. One word or very short phrase — no alternatives.', field_type:'text', show_on_front:false, phonetics:{ruby:'none',extras:[]} },
-  context: { key:'context', label:'Context', description:'Grammatical or usage context to disambiguate — e.g. "(masculine singular)", "(verb, informal)". Leave empty if not needed.', field_type:'text', show_on_front:false, phonetics:{ruby:'none',extras:[]} },
+  context: { key:'context', label:'Context', description:'Grammatical or usage context to disambiguate homographs. Leave empty for unambiguous words.', field_type:'text', show_on_front:false, phonetics:{ruby:'none',extras:[]} },
+  target_romanisation: { key:'target_romanisation', label:'Target Romanisation', description:'Latin-script pronunciation of the target word (e.g. romaji, pinyin, transliteration). Auto-generated; omitted if the word is already Latin script.', field_type:'text', show_on_front:false, phonetics:{ruby:'none',extras:[]} },
+  source_romanisation: { key:'source_romanisation', label:'Source Romanisation', description:'Latin-script pronunciation of the source translation. Auto-generated; omitted if the source language is already Latin script.', field_type:'text', show_on_front:false, phonetics:{ruby:'none',extras:[]} },
 }
 
 function normalisePhonetics(ph) {
@@ -65,7 +96,7 @@ function ensureMandatoryFields(fields) {
 function usePredictiveProgress() {
   const rafRef=useRef(null), barRef=useRef(null), valueRef=useRef(0), batchTimesRef=useRef([]), batchStartRef=useRef(null), fromRef=useRef(0), ceilingRef=useRef(0), durationRef=useRef(INITIAL_ESTIMATE_MS), totalRef=useRef(1), lastTextRef=useRef(0)
   const [displayPct,setDisplayPct]=useState(0)
-  const updateBar=useCallback((pct)=>{valueRef.current=pct;if(barRef.current)barRef.current.style.width=`${pct}%`;const now=performance.now();if(now-lastTextRef.current>100){lastTextRef.current=now;setDisplayPct(Math.round(pct))}},[])
+  const updateBar=useCallback((pct)=>{valueRef.current=pct;if(barRef.current)barRef.current.style.width=`${pct}%`;const now=performance.now();if(now-lastTextRef.current>100){lastTextRef.current=now;setDisplayPct(Math.round(pct));_importStore.set({pct:Math.round(pct)})}},[])
   const tick=useCallback(()=>{if(rafRef.current)cancelAnimationFrame(rafRef.current);const step=()=>{const elapsed=performance.now()-(batchStartRef.current??performance.now());const t=Math.min(elapsed/durationRef.current,1);const value=fromRef.current+(ceilingRef.current-fromRef.current)*t;updateBar(value);if(t<1)rafRef.current=requestAnimationFrame(step)};rafRef.current=requestAnimationFrame(step)},[updateBar])
   const reset=useCallback((n)=>{if(rafRef.current)cancelAnimationFrame(rafRef.current);totalRef.current=Math.max(n,1);valueRef.current=0;batchTimesRef.current=[];batchStartRef.current=null;fromRef.current=0;ceilingRef.current=0;if(barRef.current)barRef.current.style.width='0%';setDisplayPct(0)},[])
   const startBatch=useCallback((idx)=>{batchStartRef.current=performance.now();fromRef.current=(idx/totalRef.current)*100;ceilingRef.current=((idx+1)/totalRef.current)*100;const times=batchTimesRef.current;durationRef.current=times.length>0?times.reduce((a,b)=>a+b,0)/times.length:INITIAL_ESTIMATE_MS;tick()},[tick])
@@ -81,13 +112,19 @@ export default function BlueprintPage() {
   const { settings } = useAppStore()
   const [fields,setFields]=useState(null)
   const [importMode,setImportMode]=useState('ai')
-  const [importState,setImportState]=useState('idle')
-  const [importError,setImportError]=useState(null)
-  const [progressMsg,setProgressMsg]=useState('')
-  const [totalImported,setTotalImported]=useState(0)
   const [homographPending,setHomographPending]=useState(null)
   const [collisionPending,setCollisionPending]=useState(null)
+  const imp = useImportStore()
   const progress=usePredictiveProgress()
+  // Shorthands so the rest of the component is mostly unchanged
+  const importState = imp.state
+  const importError = imp.error
+  const progressMsg = imp.msg
+  const totalImported = imp.totalImported
+  const setImportState = (v) => imp.set({ state: v })
+  const setImportError = (v) => imp.set({ error: v })
+  const setProgressMsg = (v) => imp.set({ msg: v })
+  const setTotalImported = (fn) => imp.set({ totalImported: typeof fn === 'function' ? fn(imp.totalImported) : fn })
   const [regenState,setRegenState]=useState('idle')
   const [regenMsg,setRegenMsg]=useState('')
   const [regenProgress,setRegenProgress]=useState(0)
@@ -152,7 +189,7 @@ export default function BlueprintPage() {
     const cardsNeedingRegen=freshCards.filter(card=>regenFields.some(f=>fieldEmpty(card.fields?.[f.key])))
     if (cardsNeedingRegen.length===0){if(allDeleted.length>0)qc.invalidateQueries({queryKey:['cards',deckId]});originalBlueprintRef.current=savedFields;return}
     const batches=[]
-    for (let i=0;i<cardsNeedingRegen.length;i+=BATCH_SIZE) batches.push(cardsNeedingRegen.slice(i,i+BATCH_SIZE))
+    for (let i=0;i<cardsNeedingRegen.length;i+=REGEN_BATCH_SIZE) batches.push(cardsNeedingRegen.slice(i,i+REGEN_BATCH_SIZE))
     setRegenState('running'); setRegenMsg(`Refreshing ${regenFields.length} field${regenFields.length!==1?'s':''} for ${cardsNeedingRegen.length} card${cardsNeedingRegen.length!==1?'s':''}…`); updateRegenBar(0)
     let totalPatched=0, completedBatches=0
     const failedBatchNums=[], allPatches=[]
@@ -285,13 +322,26 @@ export default function BlueprintPage() {
               setCollisionPending(null); setImportState('generating')
               const toAdd=[...noCollision], toUpdate=[]
               for(const{incoming,existing,action}of decisions){if(action==='add')toAdd.push(incoming);if(action==='update')toUpdate.push({incoming,existing})}
-              if(toUpdate.length){const patches=toUpdate.map(({incoming,existing})=>{const{_meanings,_sense,_error,word,...fields}=incoming;return{id:existing.id,word,fields}});await api.patchCards(deckId,patches).catch(()=>{})}
+              if(toUpdate.length){const patches=toUpdate.map(({incoming,existing})=>{
+                const{_meanings,_sense,_error,word,target_romanisation,source_romanisation,...rest}=incoming
+                const fields={...rest}
+                if(target_romanisation?.trim())fields.target_romanisation=target_romanisation.trim()
+                if(source_romanisation?.trim())fields.source_romanisation=source_romanisation.trim()
+                return{id:existing.id,word,fields}
+              });await api.patchCards(deckId,patches).catch(()=>{})}
               await saveCards(toAdd)
             }})
           }
         }
         const saveCards=async cardsToSave=>{
-          const toSave=cardsToSave.map(c=>{const{_meanings,_sense,_error,word,...fields}=c;return{deck_id:deckId,word,fields}})
+          const toSave=cardsToSave.map(c=>{
+            const{_meanings,_sense,_error,word,target_romanisation,source_romanisation,...rest}=c
+            const fields={...rest}
+            // Romanisation fields come as top-level from Gemini — move into fields object
+            if(target_romanisation&&target_romanisation.trim())fields.target_romanisation=target_romanisation.trim()
+            if(source_romanisation&&source_romanisation.trim())fields.source_romanisation=source_romanisation.trim()
+            return{deck_id:deckId,word,fields}
+          })
           if(toSave.length){await batchSaveMutation.mutateAsync(toSave);setTotalImported(prev=>prev+toSave.length)}
           setImportState('done'); qc.invalidateQueries({queryKey:['cards',deckId]})
         }
@@ -320,16 +370,17 @@ export default function BlueprintPage() {
         const headers=allRows[0].map(h=>String(h).trim())
         if(!headers.includes('word')){setImportError('CSV must have a "word" column');setImportState('error');return}
         const SRS_COLS=new Set(['srs_state','last_reviewed','interval','stability','difficulty','repetitions','seen'])
+        const ROM_COLS=new Set(['target_romanisation','source_romanisation'])
         let metaRow=null, dataStartIdx=1
         const row2=allRows[1]
         const hasMeta=row2.some((cell,i)=>{if(!cell||headers[i]==='word'||SRS_COLS.has(headers[i]))return false;try{const p=JSON.parse(cell);return typeof p==='object'&&'label'in p}catch{return false}})
         if(hasMeta){metaRow=row2;dataStartIdx=2}
-        const fieldCols=headers.filter(h=>h!=='word'&&!SRS_COLS.has(h))
+        const fieldCols=headers.filter(h=>h!=='word'&&!SRS_COLS.has(h)&&!ROM_COLS.has(h))
         if(metaRow){
           const newFields=[]
           for(let i=0;i<headers.length;i++){
             const h=headers[i]
-            if(h==='word'||SRS_COLS.has(h)||MANDATORY_FIELD_KEYS.includes(h))continue
+            if(h==='word'||SRS_COLS.has(h)||ROM_COLS.has(h)||MANDATORY_FIELD_KEYS.includes(h))continue
             try{const meta=JSON.parse(metaRow[i]||'{}');newFields.push({key:h,label:meta.label||h,description:meta.description||'',field_type:meta.field_type||'text',show_on_front:meta.show_on_front||false,phonetics:normalisePhonetics(meta.phonetics),position:newFields.length})}
             catch{newFields.push({key:h,label:h,description:'',field_type:'text',show_on_front:false,phonetics:{ruby:'none',extras:[]},position:newFields.length})}
           }
@@ -349,6 +400,11 @@ export default function BlueprintPage() {
           if(row[colIdx('stability')])card.stability=Number(row[colIdx('stability')])||0
           if(row[colIdx('difficulty')])card.difficulty=Number(row[colIdx('difficulty')])||5
           if(row[colIdx('repetitions')])card.repetitions=Number(row[colIdx('repetitions')])||0
+          // Romanisation fields — stored as plain strings in fields
+          const tgtRom=colIdx('target_romanisation')>=0?row[colIdx('target_romanisation')]?.trim():''
+          const srcRom=colIdx('source_romanisation')>=0?row[colIdx('source_romanisation')]?.trim():''
+          if(tgtRom)card.fields.target_romanisation=tgtRom
+          if(srcRom)card.fields.source_romanisation=srcRom
           return card
         })
         if(!cardsToSave.length){setImportError('No valid data rows found');setImportState('error');return}
@@ -438,7 +494,7 @@ export default function BlueprintPage() {
           {[['ai','✨ AI (fill fields)'],['direct','📋 Direct CSV']].map(([v,l])=>(
             <button key={v} className="text-xs px-3 py-1.5 rounded-lg transition-all font-medium"
               style={{ background:importMode===v?'var(--bg-card)':'transparent',color:importMode===v?'var(--text-primary)':'var(--text-muted)',boxShadow:importMode===v?'var(--shadow-card)':'none' }}
-              onClick={()=>{setImportMode(v);setImportState('idle');setImportError(null)}}>{l}</button>
+              onClick={()=>{setImportMode(v);imp.set({state:'idle',error:null,msg:'',pct:0,totalImported:0})}}>{l}</button>
           ))}
         </div>
         {importMode==='ai'&&(
@@ -457,7 +513,7 @@ export default function BlueprintPage() {
                 <input type="file" accept=".csv,.txt" className="hidden" onChange={e=>e.target.files[0]&&handleCSV(e.target.files[0])}/>
               </label>
             ):importState==='done'?(
-              <ImportDone totalImported={totalImported} onReset={()=>{setImportState('idle');setTotalImported(0);progress.reset(1)}}/>
+              <ImportDone totalImported={totalImported} onReset={()=>{imp.set({state:'idle',error:null,msg:'',pct:0,totalImported:0});progress.reset(1)}}/>
             ):importState==='review'?(
               <ImportReviewing/>
             ):(
@@ -484,7 +540,7 @@ export default function BlueprintPage() {
                 <input type="file" accept=".csv,.txt" className="hidden" onChange={e=>e.target.files[0]&&handleDirectCSV(e.target.files[0])}/>
               </label>
             ):importState==='done'?(
-              <ImportDone totalImported={totalImported} onReset={()=>{setImportState('idle');setTotalImported(0)}}/>
+              <ImportDone totalImported={totalImported} onReset={()=>{imp.set({state:'idle',error:null,msg:'',pct:0,totalImported:0})}}/>
             ):importState==='review'?(
               <ImportReviewing/>
             ):(
@@ -510,7 +566,20 @@ function ImportReviewing(){return(<div className="card p-6 text-center"><div cla
 function ImportProgress({progressMsg,totalImported,displayPct,barRef}){
   const isSaving=progressMsg?.includes('Saving')
   const barColor=isSaving?'linear-gradient(90deg,var(--accent-secondary),var(--accent-primary))':'linear-gradient(90deg,var(--accent-primary),var(--accent-secondary))'
-  return(<div className="card p-6"><div className="flex items-center justify-between mb-3"><div className="text-sm font-medium" style={{ color:'var(--text-primary)' }}>{isSaving?'Saving cards…':progressMsg||'Generating…'}</div><div className="text-sm font-mono tabular-nums" style={{ color:'var(--accent-primary)' }}>{displayPct}%</div></div><div className="progress-bar"><div ref={barRef} className="import-progress-fill" style={{ width:'0%',background:barColor }}/></div>{!isSaving&&<div className="text-xs mt-2" style={{ color:'var(--text-muted)' }}>{totalImported>0?`${totalImported} card${totalImported!==1?'s':''} ready`:'AI is filling in card fields…'}</div>}</div>)
+  // Use store pct when barRef has no DOM element (e.g. user scrolled/navigated within page)
+  const pct = displayPct || _importStore.pct || 0
+  return(
+    <div className="card p-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium" style={{ color:'var(--text-primary)' }}>{isSaving?'Saving cards…':progressMsg||'Generating…'}</div>
+        <div className="text-sm font-mono tabular-nums" style={{ color:'var(--accent-primary)' }}>{pct}%</div>
+      </div>
+      <div className="progress-bar">
+        <div ref={barRef} className="import-progress-fill" style={{ width:barRef?.current?'0%':`${pct}%`,background:barColor }}/>
+      </div>
+      {!isSaving&&<div className="text-xs mt-2" style={{ color:'var(--text-muted)' }}>{totalImported>0?`${totalImported} card${totalImported!==1?'s':''} ready`:'AI is filling in card fields…'}</div>}
+    </div>
+  )
 }
 
 function FieldRow({field,onUpdate,onRemove,onMoveUp,onMoveDown,isFirst,isLast}){
@@ -520,8 +589,11 @@ function FieldRow({field,onUpdate,onRemove,onMoveUp,onMoveDown,isFirst,isLast}){
   const isMandatory=MANDATORY_FIELD_KEYS.includes(field.key)
   const setRuby=ruby=>onUpdate({phonetics:{...ph,ruby}})
   const toggleExtra=key=>{const next=ph.extras.includes(key)?ph.extras.filter(k=>k!==key):[...ph.extras,key];onUpdate({phonetics:{...ph,extras:next}})}
+  // Hidden mandatory fields — not shown in blueprint editor at all
+  if(HIDDEN_MANDATORY_KEYS.includes(field.key)) return null
+
   if(isMandatory){
-    const descriptions={source_translation:'Single clean word in your source language. Used as the typing target in Source → Target mode.',context:'Grammatical hint shown on the card front (Target → Source) to disambiguate homographs.'}
+    const descriptions={source_translation:'Single clean word in your source language. Used as the typing target in Source → Target mode.',context:'Disambiguates homographs on the card front. Leave empty for non-homographs — Gemini will do this automatically.'}
     const colors={source_translation:{bg:'rgba(0,212,168,.08)',border:'rgba(0,212,168,.25)',text:'var(--accent-secondary)',icon:'🎯'},context:{bg:'var(--accent-glow)',border:'rgba(124,106,240,.3)',text:'var(--accent-primary)',icon:'💡'}}
     const c=colors[field.key]||colors.context
     return(
@@ -530,10 +602,37 @@ function FieldRow({field,onUpdate,onRemove,onMoveUp,onMoveDown,isFirst,isLast}){
           <div className="flex flex-col gap-0.5 flex-shrink-0"><button disabled={isFirst} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button><button disabled={isLast} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button></div>
           <span style={{ fontSize:'14px' }}>{c.icon}</span>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2"><span className="text-sm font-medium" style={{ color:c.text }}>{field.label}</span><span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background:'var(--bg-surface)',color:'var(--text-muted)' }}>{field.key}</span><span className="text-xs px-1.5 py-0.5 rounded" style={{ background:'var(--bg-surface)',color:'var(--text-muted)' }}>🔒 mandatory</span></div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium" style={{ color:c.text }}>{field.label}</span>
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background:'var(--bg-surface)',color:'var(--text-muted)' }}>{field.key}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded" style={{ background:'var(--bg-surface)',color:'var(--text-muted)' }}>🔒 mandatory</span>
+            </div>
             <div className="text-xs mt-0.5" style={{ color:'var(--text-muted)' }}>{descriptions[field.key]}</div>
+            {/* Phonetics panel — mandatory fields can also have annotations */}
+            <div className="mt-2">
+              <button className="flex items-center gap-1.5 text-xs transition-colors" style={{ color:hasAnnotations?'var(--accent-primary)':'var(--text-muted)' }} onClick={()=>setShowPhonetics(s=>!s)}>
+                <span>{showPhonetics?'▾':'▸'}</span>Phonetic annotations
+                {hasAnnotations&&<span className="px-1.5 py-0.5 rounded-full text-xs font-medium" style={{ background:'var(--accent-glow)',color:'var(--accent-primary)' }}>{[ph.ruby!=='none'?ph.ruby:null,...ph.extras].filter(Boolean).join(', ')}</span>}
+              </button>
+              {showPhonetics&&(
+                <div className="mt-2 p-3 rounded-xl space-y-3" style={{ background:'var(--bg-surface)',border:'1px solid var(--border)' }}>
+                  <div>
+                    <div className="section-title mb-1.5">Ruby</div>
+                    <select className="input text-xs py-1.5" value={ph.ruby} onChange={e=>setRuby(e.target.value)}>{RUBY_OPTIONS.map(o=><option key={o.key} value={o.key}>{o.label}{o.hint?` — ${o.hint}`:''}</option>)}</select>
+                  </div>
+                  <div>
+                    <div className="section-title mb-1.5">Additional annotations</div>
+                    <div className="space-y-1.5">{EXTRA_OPTIONS.map(opt=>(
+                      <label key={opt.key} className="flex items-start gap-2.5 cursor-pointer py-0.5">
+                        <input type="checkbox" className="mt-0.5 flex-shrink-0" checked={ph.extras.includes(opt.key)} onChange={()=>toggleExtra(opt.key)}/>
+                        <div><div className="text-xs font-medium" style={{ color:ph.extras.includes(opt.key)?'var(--text-primary)':'var(--text-secondary)' }}>{opt.label}</div><div className="text-xs" style={{ color:'var(--text-muted)' }}>{opt.hint}</div></div>
+                      </label>
+                    ))}</div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="w-7 flex-shrink-0"/>
         </div>
       </div>
     )
@@ -585,16 +684,21 @@ function FieldRow({field,onUpdate,onRemove,onMoveUp,onMoveDown,isFirst,isLast}){
 function ManualCardForm({deckId,fields,onSaved}){
   const [word,setWord]=useState(''), [fieldValues,setFieldValues]=useState({}), [saving,setSaving]=useState(false), [saved,setSaved]=useState(false)
   const getAnnotationKeys=ph=>{if(!ph)return[];if(Array.isArray(ph))return ph.filter(k=>k&&k!=='none');const keys=[];if(ph.ruby&&ph.ruby!=='none')keys.push(ph.ruby);if(Array.isArray(ph.extras))keys.push(...ph.extras);return keys}
+  // Fields shown in the form: all except hidden mandatory (those have dedicated inputs below)
+  const visibleFields=fields.filter(f=>!HIDDEN_MANDATORY_KEYS.includes(f.key))
   const handleSave=async()=>{
     if(!word.trim())return; setSaving(true)
     try{
       const builtFields={}
-      for(const f of fields){
+      for(const f of visibleFields){
         const text=fieldValues[f.key]||''; if(!text)continue
         const annotationKeys=getAnnotationKeys(f.phonetics)
         if(annotationKeys.length===0){builtFields[f.key]=text}
         else{const obj={text};for(const ak of annotationKeys){const v=fieldValues[`${f.key}__${ak}`]||'';if(v)obj[ak]=v};builtFields[f.key]=obj}
       }
+      // Add romanisation fields if provided
+      if(fieldValues['target_romanisation']?.trim()) builtFields['target_romanisation']=fieldValues['target_romanisation'].trim()
+      if(fieldValues['source_romanisation']?.trim()) builtFields['source_romanisation']=fieldValues['source_romanisation'].trim()
       await api.createCard({deck_id:deckId,word:word.trim(),fields:builtFields})
       setWord('');setFieldValues({});setSaved(true);onSaved();setTimeout(()=>setSaved(false),2000)
     }catch(e){alert(e.message)}finally{setSaving(false)}
@@ -602,7 +706,7 @@ function ManualCardForm({deckId,fields,onSaved}){
   return(
     <div className="card p-5 space-y-3">
       <div><label className="section-title block mb-1.5">Word / Vocab *</label><input className="input" value={word} onChange={e=>setWord(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSave()} placeholder="Enter the target language word" autoComplete="off"/></div>
-      {fields.map(f=>{
+      {visibleFields.map(f=>{
         const annotationKeys=getAnnotationKeys(f.phonetics)
         return(
           <div key={f.key}>
@@ -617,6 +721,20 @@ function ManualCardForm({deckId,fields,onSaved}){
           </div>
         )
       })}
+      {/* Romanisation fields — always shown, optional */}
+      <div className="pt-1" style={{ borderTop:'1px solid var(--border)' }}>
+        <div className="section-title mb-2">Romanisation <span className="normal-case font-normal" style={{ color:'var(--text-muted)' }}>(optional — leave blank if word is already Latin script)</span></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="section-title block mb-1">Target pronunciation</label>
+            <input className="input text-sm" value={fieldValues['target_romanisation']||''} onChange={e=>setFieldValues(v=>({...v,target_romanisation:e.target.value}))} placeholder="e.g. ai shi te ru"/>
+          </div>
+          <div>
+            <label className="section-title block mb-1">Source pronunciation</label>
+            <input className="input text-sm" value={fieldValues['source_romanisation']||''} onChange={e=>setFieldValues(v=>({...v,source_romanisation:e.target.value}))} placeholder="e.g. ài nǐ (if source is non-Latin)"/>
+          </div>
+        </div>
+      </div>
       <button className="btn-primary" disabled={!word.trim()||saving} onClick={handleSave}>{saving?'Saving...':saved?'✓ Added!':'Add Card'}</button>
     </div>
   )

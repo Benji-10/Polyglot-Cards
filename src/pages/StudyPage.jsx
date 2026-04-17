@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAppStore } from '../store/appStore'
 import { getNextIntervalLabel } from '../lib/fsrs'
-import { fuzzyMatch, parseCloze, pickRandomExample } from '../lib/fuzzy'
+import { fuzzyMatch, fuzzyMatchAny, parseCloze, pickRandomExample } from '../lib/fuzzy'
 import { shuffle, fontForText } from '../lib/utils'
 import { extractDiacriticsFromCards, applyDiacritic, insertCharAtCursor } from '../lib/diacritics'
 import { useStudyKeyboard } from '../hooks/useKeyboard'
@@ -169,10 +169,8 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     () => extractDiacriticsFromCards(allCards),
     [allCards]
   )
-  const latinTyping = deck?.latin_typing === true
-  const romanisationField = deck?.romanisation_field || ''
-  const showDiacriticBar = (config.direction === 'sourceToTarget' || latinTyping) &&
-    (diacriticMarks.length > 0 || specialChars.length > 0)
+  // Romanisation: always use target_romanisation / source_romanisation fixed fields if present
+  const showDiacriticBar = diacriticMarks.length > 0 || specialChars.length > 0
 
   const reviewMutation = useMutation({
     mutationFn: ({cardId,rating})=>api.recordReview(cardId,rating),
@@ -276,9 +274,12 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
 
   const submitTyping=()=>{
     if (!currentCard||phase!=='prompt') return
-    const expected=getAnswer(currentCard,config.direction,blueprint,deck)
-    const result=fuzzyMatch(typingAnswer,expected||'',{strictAccents,strictMode})
-    reveal({...result,answer:expected,typed:typingAnswer})
+    // Accept romanised form OR native script — whichever the user typed
+    const candidates=getAnswerCandidates(currentCard,config.direction,blueprint)
+    const result=fuzzyMatchAny(typingAnswer,candidates,{strictAccents,strictMode})
+    // Show the primary answer in the feedback (first candidate = romanised if present)
+    const displayAnswer=candidates[0]||''
+    reveal({...result,answer:displayAnswer,typed:typingAnswer})
   }
 
   const submitCloze=()=>{
@@ -286,14 +287,22 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
     const fieldVal=currentCard.fields?.[exampleField?.key]
     const raw=fieldVal&&typeof fieldVal==='object'?fieldVal.text:(fieldVal||'')
     const cd=parseCloze(raw)
-    const result=fuzzyMatch(clozeAnswer,cd.answer||'',{strictAccents,strictMode})
-    reveal({...result,answer:cd.answer,typed:clozeAnswer})
+    // For cloze the answer is always the target word — check both native and romanised
+    const clozeNative=cd.answer||''
+    const tgtRom=currentCard.fields?.target_romanisation
+    const clozeRom=tgtRom&&typeof tgtRom==='string'&&tgtRom.trim()?tgtRom.trim():null
+    const candidates=clozeRom?[clozeRom,clozeNative]:[clozeNative]
+    const result=fuzzyMatchAny(clozeAnswer,candidates,{strictAccents,strictMode})
+    reveal({...result,answer:clozeNative,typed:clozeAnswer})
   }
 
   const submitChoice=(choice)=>{
     if (phase!=='prompt') return
-    const correct=getAnswer(currentCard,config.direction,blueprint,deck)
-    setChoiceSelected(choice); reveal({correct:choice===correct,answer:correct,chosen:choice})
+    const candidates=getAnswerCandidates(currentCard,config.direction,blueprint)
+    const correct=candidates[0]||''
+    // A choice is correct if it matches any candidate
+    const isCorrect=candidates.some(c=>c===choice)
+    setChoiceSelected(choice); reveal({correct:isCorrect,answer:correct,chosen:choice})
   }
 
   useStudyKeyboard({phase,isPassive,onReveal:()=>reveal(null),onAdvance:advanceActive,onRate:(r)=>advance(r),
@@ -336,15 +345,14 @@ function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCard
             <div className="card p-5">
               <div className="flex items-center justify-between mb-2">
                 <div className="section-title">
-                  {latinTyping && romanisationField
-                    ? `Type in Latin script (${romanisationField})`
-                    : `Type the ${config.direction==='targetToSource'?(deck?.source_language||'English'):deck?.target_language} answer`}
+                  {(()=>{
+                    const hasRom = config.direction==='sourceToTarget'
+                      ? !!currentCard?.fields?.target_romanisation
+                      : !!currentCard?.fields?.source_romanisation
+                    const lang = config.direction==='targetToSource'?(deck?.source_language||'English'):deck?.target_language
+                    return hasRom ? `Type ${lang} — native script or romanised` : `Type the ${lang} answer`
+                  })()}
                 </div>
-                {latinTyping && romanisationField && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background:'var(--accent-glow)',color:'var(--accent-primary)' }}>
-                    Romanisation mode
-                  </span>
-                )}
               </div>
               <input ref={typingInputRef} className="input text-base" value={typingAnswer} onChange={e=>setTypingAnswer(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submitTyping()} placeholder="Your answer..." data-accent-input="1"/>
               {showDiacriticBar&&<DiacriticBar marks={diacriticMarks} specials={specialChars}
@@ -460,27 +468,45 @@ function getFront(card, direction, blueprint, deck, exampleField) {
       const raw=fieldVal&&typeof fieldVal==='object'?fieldVal.text:(fieldVal||'')
       if (raw) { const {before,answer,after,hasCloze}=parseCloze(raw); clozeSentence=hasCloze?{before,answer,after}:null }
     }
-    return {word:card.word,label:deck?.target_language||'Word',isTarget:true,context:contextLanguage!=='cloze'?context:null,clozeSentence}
+    // Show target romanisation below the word if present
+    const tgtRom=card.fields?.target_romanisation
+    const tgtRomText=tgtRom&&typeof tgtRom==='string'&&tgtRom.trim()?tgtRom.trim():null
+    return {word:card.word,label:deck?.target_language||'Word',isTarget:true,context:contextLanguage!=='cloze'?context:null,clozeSentence,romanisation:tgtRomText}
   }
   const srcField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')||blueprint[0]
   const rawVal=srcField?card.fields?.[srcField.key]:null
   const val=rawVal&&typeof rawVal==='object'?rawVal.text:rawVal
-  return {word:val||card.word,label:deck?.source_language||'Source',isTarget:false,context:null,clozeSentence:null}
+  // Show source romanisation below the word if present (e.g. Chinese source → pinyin)
+  const srcRom=card.fields?.source_romanisation
+  const srcRomText=srcRom&&typeof srcRom==='string'&&srcRom.trim()?srcRom.trim():null
+  return {word:val||card.word,label:deck?.source_language||'Source',isTarget:false,context:null,clozeSentence:null,romanisation:srcRomText}
 }
 
 function getAnswer(card, direction, blueprint, deck) {
-  if (direction==='targetToSource') {
-    const srcField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')||blueprint[0]
-    const raw=srcField?card.fields?.[srcField.key]:null
-    return raw&&typeof raw==='object'?raw.text:(raw||card.word)
+  // Returns the PRIMARY answer string (used for display in multiple choice etc.)
+  const candidates = getAnswerCandidates(card, direction, blueprint)
+  return candidates[0] || card.word
+}
+
+// Returns ALL valid answer strings — romanised form first (if present), then native script.
+// fuzzyMatchAny accepts input against any of these.
+function getAnswerCandidates(card, direction, blueprint) {
+  if (direction === 'targetToSource') {
+    const srcField = blueprint.find(f=>f.key==='source_translation') || blueprint.find(f=>f.key==='definition') || blueprint.find(f=>f.key==='reading') || blueprint[0]
+    const raw = srcField ? card.fields?.[srcField.key] : null
+    const nativeText = raw && typeof raw === 'object' ? raw.text : (raw || card.word)
+    const srcRom = card.fields?.source_romanisation
+    const romText = srcRom && typeof srcRom === 'string' && srcRom.trim() ? srcRom.trim() : null
+    // If source has romanisation: accept romanised OR native; primary = romanised
+    if (romText) return [romText, nativeText].filter(Boolean)
+    return [nativeText].filter(Boolean)
   }
-  // sourceToTarget: if latin_typing mode, return the romanisation field text
-  if (deck?.latin_typing && deck?.romanisation_field) {
-    const romVal = card.fields?.[deck.romanisation_field]
-    const romText = romVal && typeof romVal === 'object' ? romVal.text : romVal
-    if (romText) return romText
-  }
-  return card.word
+  // sourceToTarget
+  const tgtRom = card.fields?.target_romanisation
+  const romText = tgtRom && typeof tgtRom === 'string' && tgtRom.trim() ? tgtRom.trim() : null
+  // Accept romanised OR native word; primary = romanised if present
+  if (romText) return [romText, card.word].filter(Boolean)
+  return [card.word].filter(Boolean)
 }
 
 function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onFlip, resultBadge, animationsEnabled=true }) {
@@ -503,6 +529,9 @@ function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onF
             <div className="mt-3 px-3 py-1.5 rounded-lg text-center" style={{ background:'var(--accent-glow)',border:'1px solid rgba(124,106,240,.2)' }}>
               <div className="text-sm font-medium" style={{ color:'var(--accent-primary)',fontFamily:fontForText(front.context) }}>{front.context}</div>
             </div>
+          )}
+          {front.romanisation&&(
+            <div className="mt-2 text-sm font-mono" style={{ color:'var(--text-secondary)' }}>{front.romanisation}</div>
           )}
           {front.isTarget&&frontField&&frontCard?.fields?.[frontField.key]&&(
             <div className="mt-3 text-base" style={{ color:'var(--text-secondary)' }}>
